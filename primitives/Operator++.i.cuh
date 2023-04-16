@@ -646,4 +646,70 @@ void forAllEdges(HornetClass&                hornet,
     load_balancing.apply(hornet, queue.device_input_ptr(), queue.size(), op);
 }
 
+template<typename HornetClass, typename Operator, typename VT>
+void forAllVerticesBatch(HornetClass& hornet,
+                         hornet::gpu::BatchUpdate<VT>& batch_update,
+                         const Operator& op) {
+
+    //using VT = typename HornetClass::VertexType;
+
+    auto size = batch_update.in_edge().get_num_items();
+    auto in_ptr = batch_update.in_edge().get_soa_ptr();
+
+    VT * batch_src = in_ptr.template get<0>();
+    VT * batch_dst = in_ptr.template get<1>();
+
+    detail::forAllVerticesKernel
+        <<< xlib::ceil_div<BLOCK_SIZE_OP2>(size), BLOCK_SIZE_OP2 >>>
+        (hornet.device(), batch_src, size, op);
+
+    CHECK_CUDA_ERROR
+}
+
+template<typename HornetClass, typename Operator, typename VT>
+void forAllEdgesBatch(HornetClass& hornet,
+                      hornet::gpu::BatchUpdate<VT>& batch_update,
+                      const Operator& op) {
+
+    auto size = batch_update.in_edge().get_num_items();
+    auto in_ptr  = batch_update.in_edge().get_soa_ptr();
+
+    VT * batch_src = in_ptr.template get<0>();
+    VT * batch_dst = in_ptr.template get<1>();
+
+    detail::forAllEdgesKernel
+        <<< xlib::ceil_div<BLOCK_SIZE_OP2>(size), BLOCK_SIZE_OP2 >>>
+        (hornet.device(), batch_src, batch_dst, size, op);
+
+    CHECK_CUDA_ERROR
+}
+
+template<typename HornetClass, typename Operator, typename VT, typename LoadBalancing>
+void forAllEdgesBatch(HornetClass& hornet,
+                      hornet::gpu::BatchUpdate<VT>& batch_update,
+                      const Operator& op,
+                      const LoadBalancing& load_balancing) {
+
+    auto size = batch_update.size();
+    auto soa_ptr = batch_update.in_edge().get_soa_ptr();
+
+    VT *src = soa_ptr.template get<0>();
+    VT *dst = soa_ptr.template get<1>();
+
+    load_balancing.apply(hornet, src, size, op);
+}
+
+/*
+template<typename HornetClass, typename Operator, template BatchUpdate>
+void forAllEdges(HornetClass& hornet,
+                 const BatchUpdate& batch_update,
+                 const Operator& op) {
+    auto size = batch_update.size();
+    detail::forAllEdgesKernel
+        <<< xlib::ceil_div<BLOCK_SIZE_OP2>(size), BLOCK_SIZE_OP2 >>>
+        (hornet.device_side(), batch_update.src_ptr(), batch_update.dst_ptr(), size, op);
+    CHECK_CUDA_ERROR
+}
+*/
+
 } // namespace hornets_nest

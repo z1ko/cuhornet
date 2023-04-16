@@ -43,7 +43,7 @@
 #include "LoadBalancing/VertexBased.cuh"
 #include "LoadBalancing/BinarySearch.cuh"
 #include <BasicTypes.hpp>
-//#include <Core/BatchUpdate/BatchUpdate.cuh>
+#include <Core/BatchUpdate/BatchUpdate.cuh>
 
 namespace hornets_nest {
 
@@ -217,17 +217,32 @@ void forAllEdges(HornetClass&                hornet,
 
 //==============================================================================
 
-//using BatchUpdate = hornet::BatchUpdate;
-//
-//template<typename HornetClass, typename Operator>
-//void forAllEdges(HornetClass& hornet,
-//                 const BatchUpdate& batch_update,
-//                 const Operator& op);
-//
-//template<typename HornetClass, typename Operator>
-//void forAllVertices(HornetClass& hornet,
-//                    const BatchUpdate& batch_update,
-//                    const Operator& op);
+/*
+template<typename HornetClass, typename Operator, template<typename> typename BatchUpdate>
+void forAllEdgesBatch(HornetClass& hornet,
+                 const BatchUpdate<typename HornetClass::VertexType>& batch_update,
+                 const Operator& op);
+*/
+
+template<typename HornetClass, typename Operator, typename VT>
+void forAllVerticesBatch(HornetClass& hornet,
+                    hornet::gpu::BatchUpdate<VT>& batch_update,
+                    const Operator& op);
+
+template<typename HornetClass, typename Operator, typename VT, typename LoadBalancing>
+void forAllEdgesBatch(HornetClass& hornet,
+                      hornet::gpu::BatchUpdate<VT>& batch_update,
+                      const Operator& op,
+                      const LoadBalancing& load_balancing);
+
+
+
+/*
+template<typename HornetClass, typename Operator>
+void forAllVertices(HornetClass& hornet,
+                    const BatchUpdate& batch_update,
+                    const Operator& op);
+*/
 
 } // namespace hornets_nest
 
