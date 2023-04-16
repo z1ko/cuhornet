@@ -5,6 +5,9 @@ project(${PROJECT} LANGUAGES CXX CUDA)
 
 include(../compiler-util/CMakeLists.txt)
 
+# Necessary to disable a warning about an unrecognized gcc pragma instruction
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcudafe \"--diag_suppress=1675\"")
+
 ###################################################################################################
 # - include paths ---------------------------------------------------------------------------------
 
@@ -31,13 +34,15 @@ endif()
 ###################################################################################################
 # - add executables -------------------------------------------------------------------------------
 
-add_executable(hornet_mgpu_insert_test            test/HornetMultiGPUInsertTest.cu)
-add_executable(hornet_insert_weighted_test        test/HornetInsertTestWeighted.cu)
-add_executable(hornet_insert_test                 test/HornetInsertTest.cu)
-add_executable(hornet_delete_test                 test/HornetDeleteTest.cu)
+add_executable(hornet_mgpu_insert_test                      test/HornetMultiGPUInsertTest.cu)
+add_executable(hornet_insert_weighted_test                  test/HornetInsertTestWeighted.cu)
+add_executable(hornet_insert_weighted_test_modified         test/HornetInsertTestWeighted.cu)
+add_executable(hornet_insert_test                           test/HornetInsertTest.cu)
+add_executable(hornet_delete_test                           test/HornetDeleteTest.cu)
 
-target_link_libraries(hornet_mgpu_insert_test           hornet)
-target_link_libraries(hornet_insert_weighted_test       hornet)
-target_link_libraries(hornet_insert_test                hornet)
-target_link_libraries(hornet_delete_test                hornet)
+target_link_libraries(hornet_mgpu_insert_test               hornet)
+target_link_libraries(hornet_insert_weighted_test           hornet)
+target_link_libraries(hornet_insert_test                    hornet)
+target_link_libraries(hornet_delete_test                    hornet)
+target_link_libraries(hornet_insert_weighted_test_modified  hornet)
 

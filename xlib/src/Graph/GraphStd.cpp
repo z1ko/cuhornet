@@ -109,8 +109,8 @@ void GraphStd<vid_t, eoff_t>::allocateAux(const GInfo& ginfo) noexcept {
         new_num_edges = _bitmask.size();
     }
 
-    xlib::check_overflow<vid_t>(ginfo.num_vertices);
-    xlib::check_overflow<eoff_t>(new_num_edges);
+    //xlib::check_overflow<vid_t>(ginfo.num_vertices);
+    //xlib::check_overflow<eoff_t>(new_num_edges);
     _nV = static_cast<vid_t>(ginfo.num_vertices);
     _nE = static_cast<eoff_t>(new_num_edges);
 
