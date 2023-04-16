@@ -56,7 +56,7 @@ int exec(int argc, char* argv[]) {
     std::cout<<"=======\n";
     Timer<DEVICE> TM(3);
     TM.start();
-    hornet_gpu.insert(batch_update);
+    //hornet_gpu.insert(batch_update);  <--- Removed
     TM.stop();
 
     printf("ne: %d\n", hornet_gpu.nE());
@@ -64,14 +64,14 @@ int exec(int argc, char* argv[]) {
     TM.print("Insertion " + std::to_string(batch_size) + ":  ");
 
     auto inst_coo = hornet_gpu.getCOO(true);
-    init_coo.append(randomBatch);
+    init_coo.append(randomBatch); // <--- Not Removed
     init_coo.sort();
 
     std::cout<<"Creating multimap for testing correctness...";
     auto init_coo_map = getHostMMap(init_coo);
     auto inst_coo_map = getHostMMap(inst_coo);
     std::cout<<"...Done!\n";
-    if (inst_coo_map == inst_coo_map) {
+    if (inst_coo_map == inst_coo_map) { // <--- They should be different, but still passes
       std::cout<<"Passed\n";
     } else {
       std::cout<<"Failed\n";

@@ -47,7 +47,18 @@ int exec(int argc, char* argv[]) {
     hornet::RandomGenTraits<hornet::EMPTY> cooGenTraits;
     auto randomBatch = hornet::generateRandomCOO<vert_t, eoff_t>(graph.nV(), batch_size, cooGenTraits);
     Update batch_update(randomBatch);
+
+    printf("ne: %d\n", hornet_gpu.nE());
+    std::cout<<"=======\n";
+    Timer<DEVICE> TM(3);
+    TM.start();
     hornet_gpu.insert(batch_update);
+    TM.stop();
+
+    printf("ne: %d\n", hornet_gpu.nE());
+    std::cout<<"=======\n";
+    TM.print("Insertion " + std::to_string(batch_size) + ":  ");
+
     auto inst_coo = hornet_gpu.getCOO(true);
     init_coo.append(randomBatch);
     init_coo.sort();
@@ -85,6 +96,21 @@ int exec(int argc, char* argv[]) {
     }
 
     return 0;
+
+    /*
+    std::cout<<"Creating multimap for testing correctness...";
+    auto init_coo_map = getHostMMap(init_coo);
+    auto inst_coo_map = getHostMMap(inst_coo);
+    std::cout<<"...Done!\n";
+
+    if (inst_coo_map == inst_coo_map) {
+        std::cout<<"Passed\n";
+    } else {
+        std::cout<<"Failed\n";
+    }
+
+    return 0;
+    */
 }
 
 int main(int argc, char* argv[]) {
