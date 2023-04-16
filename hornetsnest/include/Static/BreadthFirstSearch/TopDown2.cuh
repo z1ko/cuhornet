@@ -73,6 +73,8 @@ public:
 
   dist_t getLevels() { return current_level; }
 
+  dist_t* get_distance_vector() { return d_distances; }
+
 private:
   BufferPool pool;
   TwoLevelQueue<vid_t> queue;
