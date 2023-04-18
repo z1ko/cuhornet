@@ -105,10 +105,11 @@ struct BFSOperatorAtomic { // deterministic
   TwoLevelQueue<vid_t> queue;
 
   OPERATOR(Vertex &vertex, Edge &edge) {
-    auto dst = edge.dst_id();
-    if (d_distances[dst] == INF) {
-      if (atomicCAS(d_distances + dst, INF, current_level) == INF)
-        queue.insert(dst);
+      //printf("Visiting %d -> %d\n", vertex.id(), edge.dst_id());
+      auto dst = edge.dst_id();
+      if (d_distances[dst] == INF) {
+          if (atomicCAS(d_distances + dst, INF, current_level) == INF)
+              queue.insert(dst);
     }
   }
 };
@@ -148,6 +149,7 @@ template <typename HornetGraph> void BFSTOPDOWN2::run() {
   printf("bfs_source = %d\n", bfs_source);
   while (queue.size() > 0) {
 
+      //printf("Expanding queue of %d nodes\n", queue.size());
     forAllEdges(StaticAlgorithm<HornetGraph>::hornet, queue,
                 BFSOperatorAtomic{current_level, d_distances, queue},
                 load_balancing);
@@ -159,7 +161,8 @@ template <typename HornetGraph> void BFSTOPDOWN2::run() {
 }
 
 template <typename HornetGraph> void BFSTOPDOWN2::release() {
-  d_distances = nullptr;
+    gpu::free(d_distances, StaticAlgorithm<HornetGraph>::hornet.nV());
+    d_distances = nullptr;
 }
 
 template <typename HornetGraph> bool BFSTOPDOWN2::validate() { return true; }

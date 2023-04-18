@@ -53,8 +53,13 @@ void generateBatch(const graph::GraphStd<>& graph, int& batch_size,
     using vid_distribution = std::uniform_int_distribution<vert_t>;
 
     if (batch_type == BatchGenType::REMOVE) {
+
+#if 1
         auto seed = std::chrono::high_resolution_clock::now().time_since_epoch()
                     .count();
+#else
+        auto seed = 1337;
+#endif
         std::mt19937_64 gen(seed);
         vid_distribution distribution_src(0, graph.nV() - 1);
         for (int i = 0; i < batch_size; i++) {
@@ -78,8 +83,12 @@ void generateBatch(const graph::GraphStd<>& graph, int& batch_size,
         }
     }
     else {
+#if 1
         auto seed = std::chrono::high_resolution_clock::now().time_since_epoch()
-                    .count();
+                .count();
+#else
+        auto seed = 1337;
+#endif
         std::mt19937_64 gen(seed);
         std::uniform_int_distribution<vert_t> distribution(0, graph.nV() - 1);
         for (int i = 0; i < batch_size; i++) {
