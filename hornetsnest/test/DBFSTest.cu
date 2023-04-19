@@ -20,8 +20,26 @@ using namespace graph::parsing_prop;
 
 using HornetInit = ::hornet::HornetInit<vert_t>;
 using HornetGraph = ::hornet::gpu::Hornet<vert_t>;
-using HornetBatchUpdatePtr = hornet::BatchUpdatePtr<vert_t, hornet::EMPTY, hornet::DeviceType::HOST>;
+using HornetBatchUpdatePtr = hornet::BatchUpdatePtr<vert_t, hornet::EMPTY, hornet::DeviceType::DEVICE>;
 using HornetBatchUpdate = hornet::gpu::BatchUpdate<vert_t>;
+
+// Generate a batch that requires an expansion
+void generateEvilBatch(vert_t* src, vert_t* dst, int batch_size, dist_t* dist, int dist_size, int delta) {
+    srand(time(0));
+    for(int i = 0; i < batch_size; i++) {
+
+        vert_t src_id = rand() % dist_size;
+        vert_t dst_id = rand() % dist_size;
+
+        while(dist[dst_id] == INF || dist[dst_id] - dist[src_id] < delta) {
+            src_id = rand() % dist_size;
+            dst_id = rand() % dist_size;
+        }
+
+        src[i] = src_id;
+        dst[i] = dst_id;
+    }
+}
 
 int exec(int argc, char** argv) {
 
@@ -57,80 +75,53 @@ int exec(int argc, char** argv) {
     vert_t* batch_src = new vert_t[batch_size];
     vert_t* batch_dst = new vert_t[batch_size];
 
-    printf("Generating batch of %d edges\n", batch_size);
-    generateBatch(host_graph, batch_size, batch_src, batch_dst, BatchGenType::INSERT, batch_gen_property::UNIQUE);
+    vert_t *dev_batch_src, *dev_batch_dst;
+    cudaMalloc(&dev_batch_src, sizeof(vert_t) * batch_size);
+    cudaMalloc(&dev_batch_dst, sizeof(vert_t) * batch_size);
 
-    printf("Batch edges:\n");
+    printf("Generating batch of %d edges\n", batch_size);
+#if 1
+    generateBatch(host_graph, batch_size, batch_src, batch_dst, BatchGenType::INSERT, batch_gen_property::UNIQUE);
+#else
+    dist_t* distances = DBFS.get_host_distance_vector();
+    generateEvilBatch(batch_src, batch_dst, batch_size, distances, device_graph.nV(), 2);
+    delete[] distances;
+#endif
+
+    printf("Generated edges: \n");
     for(int i = 0; i < batch_size; i++) {
         printf("\t%d -> %d\n", batch_src[i], batch_dst[i]);
     }
 
+    // Copy to device
+    cudaMemcpy(dev_batch_src, batch_src, sizeof(vert_t) * batch_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(dev_batch_dst, batch_dst, sizeof(vert_t) * batch_size, cudaMemcpyHostToDevice);
+
     // From src to dst
-    HornetBatchUpdatePtr update_src_dst_ptr{batch_size, batch_src, batch_dst};
-    HornetBatchUpdate update_src_dst{update_src_dst_ptr};
+    HornetBatchUpdatePtr update_src_dst_ptrs{batch_size, dev_batch_src, dev_batch_dst};
+    HornetBatchUpdate update_src_dst{update_src_dst_ptrs};
+
+#if 1
+    printf("=====================================\n");
+    printf("Graph before and after batch         \n");
+
+    device_graph.print();
     device_graph.insert(update_src_dst, false, false);
-
-    // From dst to src
-    HornetBatchUpdatePtr update_dst_src_ptr{batch_size, batch_dst, batch_src};
-    HornetBatchUpdate update_dst_src{update_dst_src_ptr};
-    device_graph_inv.insert(update_dst_src, false, false);
-
-    //device_graph.insert(update_dst_src, false, false); // NOTE: Assume undirected graph
-
-
-
-#if 0
-    printf("===================================\n");
-    printf("Normal graph:\n");
+    printf(" --- \n");
     device_graph.print();
 
-    printf("===================================\n");
-    printf("Inverse graph:\n");
+    // From dst to src
+    HornetBatchUpdatePtr update_dst_src_ptrs{batch_size, dev_batch_dst, dev_batch_src};
+    HornetBatchUpdate update_dst_src{update_dst_src_ptrs};
+
+    printf("=====================================\n");
+    printf("Inverse graph before and after batch \n");
+
+    device_graph.print();
+    device_graph_inv.insert(update_dst_src, false, false);
+    printf(" --- \n");
     device_graph_inv.print();
 #endif
-
-    // =======================================================================
-    // Sanity check
-
-    auto device_graph_COO = device_graph.getCOO();
-    auto device_graph_map = getHostMMap(device_graph_COO);
-
-    auto device_graph_inv_COO = device_graph_inv.getCOO();
-    auto device_graph_inv_map = getHostMMap(device_graph_inv_COO);
-
-    // Check that all edges have been applied
-    for (int i = 0; i < batch_size; i++) {
-
-        // SRC -> DST
-        bool found_child = false;
-        for (auto it = device_graph_map.find(batch_src[i]); it != device_graph_map.end(); it++) {
-            if (std::get<0>(it->second) == batch_dst[i]) {
-                found_child = true;
-                break;
-            }
-        }
-
-        if (!found_child) {
-            printf("[%4d] Edge %d -> %d not inserted correctly: missing child node\n",
-                   i, batch_src[i], batch_dst[i]);
-            DBFS.print_children(batch_src[i]);
-        }
-
-        // DST -> SRC
-        bool found_parent = false;
-        for (auto it = device_graph_inv_map.find(batch_dst[i]); it != device_graph_inv_map.end(); it++) {
-            if (std::get<0>(it->second) == batch_src[i]) {
-                found_parent = true;
-                break;
-            }
-        }
-
-        if (!found_parent) {
-            printf("[%4d] Edge %d -> %d not inserted correctly: missing parent node\n",
-                   i, batch_src[i], batch_dst[i]);
-            DBFS.print_parents(batch_dst[i]);
-        }
-    }
 
     // =======================================================================
 

@@ -36,6 +36,7 @@ public:
     void set_source(vert_t source);
     dist_t get_current_level() const;
     Stats get_stats() const;
+    dist_t* get_host_distance_vector() const;
 
     /// @brief Process the inserted or removed edges to generate an updated distance array
     void batchUpdate(const vert_t* src_vertices, const vert_t* dst_vertices, int count);
@@ -93,7 +94,7 @@ struct Expand {
                 /*
                 printf("\tAdded new node to frontier and set new level for node %d: %d\n",
                        edge.dst_id(), d_distances[dst]);
-                       */
+                */
             }
         }
     }
@@ -117,12 +118,10 @@ struct VertexUpdate {
         //printf("Analyzing edge %d[d: %d] -> %d[d: %d] for best father\n",
         //       vertex.id(), distances[vertex.id()], edge.dst_id(), distances[edge.dst_id()]);
 
-#if 0
+#if 1
         // WORKING VERSION
-        const bool initialized_parent = distances[edge.dst_id()] != INF;
         const bool better_distance = distances[edge.dst_id()] < distances[vertex.id()] - 1;
-
-        if (initialized_parent && better_distance) {
+        if (better_distance) {
             atomicMin(&distances[vertex.id()], distances[edge.dst_id()] + 1);
             //printf("\tNew smallest father for %d[d: %d]: %d[d: %d]\n",
             //       vertex.id(), distances[vertex.id()], edge.dst_id(), distances[edge.dst_id()]);
@@ -145,9 +144,9 @@ struct DynamicExpandEdge {
 
 #if 1
         // WORKING VERSION
+
         const bool better_distance = distances[edge.dst_id()] - distances[vertex.id()] > 1;
         if (better_distance) {
-            const dist_t old_distance = distances[edge.dst_id()];
             atomicMin(&distances[edge.dst_id()], distances[vertex.id()] + 1);
             frontier.insert(edge.dst_id()); // <-- TODO: Solve duplicate nodes problems
 
@@ -190,6 +189,13 @@ dist_t DynamicBFS<HornetGraph>::get_current_level() const {
 template<typename HornetGraph>
 auto DynamicBFS<HornetGraph>::get_stats() const -> Stats {
     return _stats;
+}
+
+template<typename HornetGraph>
+dist_t* DynamicBFS<HornetGraph>::get_host_distance_vector() const {
+    dist_t* result = new dist_t[_graph.nV()];
+    gpu::copyToHost(_distances, _graph.nV(), result);
+    return result;
 }
 
 template <typename HornetGraph> 
@@ -275,9 +281,6 @@ void DynamicBFS<HornetGraph>::batchUpdate(const vert_t* src_vertices, const vert
     forAllEdges(_parent_graph, _frontier, VertexUpdate { _distances, _frontier }, _load_balancing);
     //printf("===========================================\n");
 
-    int expansion_count = 0;
-    int visited_nodes = 0;
-
     // Propagate change to all nodes
     while (_frontier.size() > 0) {
         //printf("DYNAMIC EXPANSION =========================\n");
@@ -289,10 +292,6 @@ void DynamicBFS<HornetGraph>::batchUpdate(const vert_t* src_vertices, const vert
         forAllEdges(_graph, _frontier, DynamicExpandEdge {  _distances, _frontier }, _load_balancing);
         _frontier.swap();
     }
-
-    //printf("===========================================\n");
-    //printf("Expansions count: %d\n", expansion_count);
-    //printf("Visited nodes: %d\n", visited_nodes);
 }
 
 template<typename HornetGraph>
