@@ -39,7 +39,8 @@ public:
     dist_t* get_host_distance_vector() const;
 
     /// @brief Process the inserted or removed edges to generate an updated distance array
-    void batchUpdate(const vert_t* src_vertices, const vert_t* dst_vertices, int count);
+    void update(const vert_t* src_vertices, const vert_t* dst_vertices, int count);
+    void update(BatchUpdate& batch);
 
     void print_nodes() const;
     void print_children(vert_t vertex);
@@ -50,7 +51,7 @@ private:
     HornetGraph& _parent_graph;
 
     BufferPool _buffer_pool;
-    load_balancing::LogarthimRadixBinning32 _load_balancing;
+    load_balancing::BinarySearch _load_balancing;
     TwoLevelQueue<vert_t> _frontier;
     Stats _stats { };
 
@@ -123,6 +124,8 @@ struct VertexUpdate {
         const bool better_distance = distances[edge.dst_id()] < distances[vertex.id()] - 1;
         if (better_distance) {
             atomicMin(&distances[vertex.id()], distances[edge.dst_id()] + 1);
+            frontier.insert(vertex.id());
+
             //printf("\tNew smallest father for %d[d: %d]: %d[d: %d]\n",
             //       vertex.id(), distances[vertex.id()], edge.dst_id(), distances[edge.dst_id()]);
         }
@@ -259,18 +262,15 @@ void DynamicBFS<HornetGraph>::run()
 #endif
 }
 
-/*
 template<typename HornetGraph>
-void DynamicBFS<HornetGraph>::batchUpdate(BatchUpdate& batch) {
+void DynamicBFS<HornetGraph>::update(BatchUpdate& batch) {
 
     auto in_edge_soa = batch.in_edge().get_soa_ptr();
     vert_t* dst_vertices = in_edge_soa.template get<0>();
-    batchUpdate(dst_vertices, batch.in_edge().get_num_items());
 }
-*/
 
 template<typename HornetGraph>
-void DynamicBFS<HornetGraph>::batchUpdate(const vert_t* src_vertices, const vert_t* dst_vertices, int count)
+void DynamicBFS<HornetGraph>::update(const vert_t* src_vertices, const vert_t* dst_vertices, int count)
 {
     _stats.total_frontier_expansions = 0;
     _stats.total_visited_vertices = 0;
@@ -279,12 +279,14 @@ void DynamicBFS<HornetGraph>::batchUpdate(const vert_t* src_vertices, const vert
     //printf("VERTEX UPDATE =============================\n");
     _frontier.insert(dst_vertices, count);
     forAllEdges(_parent_graph, _frontier, VertexUpdate { _distances, _frontier }, _load_balancing);
-    //printf("===========================================\n");
+    _frontier.swap();
 
     // Propagate change to all nodes
     while (_frontier.size() > 0) {
+
+        cudaDeviceSynchronize();
         //printf("DYNAMIC EXPANSION =========================\n");
-        //printf("Expanding frontier with %d nodes\n", work_queue.size());
+        //printf("Expanding frontier with %d nodes\n", _frontier.size());
 
         _stats.total_frontier_expansions += 1;
         _stats.total_visited_vertices += _frontier.size();

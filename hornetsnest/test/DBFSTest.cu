@@ -82,16 +82,28 @@ int exec(int argc, char** argv) {
     printf("Generating batch of %d edges\n", batch_size);
 #if 1
     generateBatch(host_graph, batch_size, batch_src, batch_dst, BatchGenType::INSERT, batch_gen_property::UNIQUE);
+
+    /*
+    // PROBLEMATICO e DETERMINISTICO
+    batch_src[0] = 3; batch_dst[0] = 2;
+    batch_src[1] = 3; batch_dst[1] = 12;
+    batch_src[2] = 5; batch_dst[2] = 6;
+    batch_src[3] = 5; batch_dst[3] = 9;
+    batch_src[4] = 7; batch_dst[4] = 1;
+    */
+
 #else
     dist_t* distances = DBFS.get_host_distance_vector();
     generateEvilBatch(batch_src, batch_dst, batch_size, distances, device_graph.nV(), 2);
     delete[] distances;
 #endif
 
+#if 0
     printf("Generated edges: \n");
     for(int i = 0; i < batch_size; i++) {
         printf("\t%d -> %d\n", batch_src[i], batch_dst[i]);
     }
+#endif
 
     // Copy to device
     cudaMemcpy(dev_batch_src, batch_src, sizeof(vert_t) * batch_size, cudaMemcpyHostToDevice);
@@ -101,33 +113,36 @@ int exec(int argc, char** argv) {
     HornetBatchUpdatePtr update_src_dst_ptrs{batch_size, dev_batch_src, dev_batch_dst};
     HornetBatchUpdate update_src_dst{update_src_dst_ptrs};
 
-#if 1
+    // From dst to src
+    HornetBatchUpdatePtr update_dst_src_ptrs{batch_size, dev_batch_dst, dev_batch_src};
+    HornetBatchUpdate update_dst_src{update_dst_src_ptrs};
+
+#if 0
     printf("=====================================\n");
     printf("Graph before and after batch         \n");
 
     device_graph.print();
-    device_graph.insert(update_src_dst, false, false);
+    device_graph.insert(update_src_dst, true, true);
     printf(" --- \n");
     device_graph.print();
-
-    // From dst to src
-    HornetBatchUpdatePtr update_dst_src_ptrs{batch_size, dev_batch_dst, dev_batch_src};
-    HornetBatchUpdate update_dst_src{update_dst_src_ptrs};
 
     printf("=====================================\n");
     printf("Inverse graph before and after batch \n");
 
     device_graph.print();
-    device_graph_inv.insert(update_dst_src, false, false);
+    device_graph_inv.insert(update_dst_src, true, true);
     printf(" --- \n");
     device_graph_inv.print();
+#else
+    device_graph.insert(update_src_dst, true, true);
+    device_graph_inv.insert(update_dst_src, true, true);
 #endif
 
     // =======================================================================
 
     timer::Timer<timer::DEVICE> TM;
     TM.start();
-    DBFS.batchUpdate(batch_src, batch_dst, batch_size);
+    DBFS.update(batch_src, batch_dst, batch_size);
     TM.stop();
 
     auto stats = DBFS.get_stats();
