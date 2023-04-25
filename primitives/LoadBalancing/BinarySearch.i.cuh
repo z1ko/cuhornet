@@ -37,6 +37,7 @@
 #include "StandardAPI.hpp"
 #include <Device/Primitives/CubWrapper.cuh>  //xlib::CubExclusiveSum
 #include <Device/Util/DeviceProperties.cuh>  //xlib::SMemPerBlock
+#include <thrust/scan.h>                     //thrust::exclusive_scan
 
 namespace hornets_nest {
 namespace load_balancing {
@@ -47,7 +48,6 @@ BinarySearch::BinarySearch(HornetClass& hornet,
     //static_assert(IsHornet<HornetClass>::value,
     //             "BinarySearch: parameter is not an instance of Hornet Class");
     d_work.resize(work_factor * hornet.nV());
-    prefixsum.resize(work_factor * hornet.nV());
 }
 
 inline BinarySearch::~BinarySearch() noexcept {
@@ -59,13 +59,10 @@ void BinarySearch::apply(HornetClass& hornet,
                          const vid_t *      d_input,
                          int                num_vertices,
                          const Operator&    op) const noexcept {
-    //static_assert(IsHornet<HornetClass>::value,
-    //             "BinarySearch: paramenter is not an instance of Hornet Class");
+
     d_work.resize(num_vertices + 1);
-    prefixsum.resize(num_vertices + 1);
-    int ITEMS_PER_BLOCK = xlib::DeviceProperty
-                          ::smem_per_block<vid_t>(BLOCK_SIZE);
-    //assert(num_vertices < _work_size && "BinarySearch (work queue) too small");
+    assert(num_vertices < _work_size && "BinarySearch (work queue) too small");
+    //printf("[BSLD] Resized d_work and prefixsum to %d\n", num_vertices + 1);
 
     if (d_input != nullptr) {
     kernel::computeWorkKernel
@@ -78,21 +75,40 @@ void BinarySearch::apply(HornetClass& hornet,
     }
     CHECK_CUDA_ERROR
 
-    prefixsum.run(d_work.data().get(), num_vertices + 1);
+#if 0
+    thrust::host_vector<vid_t> h_input(num_vertices);
+    gpu::copyToHost(d_input, num_vertices, h_input.data().get());
+
+    printf("[BSLD] Executed computeWorkKernel, result vector:\n");
+    thrust::host_vector<int> h_work = d_work;
+    for (unsigned int i = 0; i < h_work.size() - 1; i++)
+        printf("[%6d]\tvertex: %6d | work_size: %4d\n", i, h_input[i], h_work[i]);
+#endif
+
+    thrust::exclusive_scan(d_work.begin(), d_work.end(), d_work.begin());
     CHECK_CUDA_ERROR
+
+#if 0
+    printf("[BSLD] Executed PrefixSum, result vector:\n");
+    h_work = d_work;
+    for (unsigned int i = 0; i < h_work.size() - 1; i++)
+        printf("[%6d]\tvertex: %6d | work_size: %4d\n", i, h_input[i], h_work[i]);
+    printf("[BSLD] Total work: %d\n", h_work[h_work.size() - 1]);
+#endif
 
     int total_work;
     cuMemcpyToHost(d_work.data().get() + num_vertices, total_work);
-    unsigned grid_size = xlib::ceil_div(total_work, ITEMS_PER_BLOCK);
     if (total_work == 0)
         return;
+
+    const unsigned int BLOCK_COUNT = xlib::ceil_div(total_work, BLOCK_SIZE);
     if (d_input != nullptr) {
     kernel::binarySearchKernel<BLOCK_SIZE>
-        <<< grid_size, BLOCK_SIZE >>>
+        <<< BLOCK_COUNT, BLOCK_SIZE >>>
         (hornet.device(), d_input, d_work.data().get(), num_vertices + 1, op);
     } else {
     kernel::binarySearchKernel<BLOCK_SIZE>
-        <<< grid_size, BLOCK_SIZE >>>
+        <<< BLOCK_COUNT, BLOCK_SIZE >>>
         (hornet.device(), d_work.data().get(), num_vertices + 1, op);
     }
     CHECK_CUDA_ERROR

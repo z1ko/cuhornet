@@ -86,7 +86,7 @@ void binarySearchKernel(HornetDevice              hornet,
                             const auto&   edge = vertex.edge(offset);
                             op(vertex, edge);
                         };
-    xlib::binarySearchLB<BLOCK_SIZE, ITEMS_PER_BLOCK / BLOCK_SIZE>
+    xlib::simpleBinarySearchLB<BLOCK_SIZE, ITEMS_PER_BLOCK / BLOCK_SIZE>
         (d_work, work_size, smem, lambda);
 }
 
@@ -106,7 +106,7 @@ void binarySearchKernel(HornetDevice              hornet,
                             const auto&   edge = vertex.edge(offset);
                             op(vertex, edge);
                         };
-    xlib::binarySearchLB<BLOCK_SIZE, ITEMS_PER_BLOCK / BLOCK_SIZE>
+    xlib::simpleBinarySearchLB<BLOCK_SIZE, ITEMS_PER_BLOCK / BLOCK_SIZE>
       (d_work, work_size, smem, lambda);
 }
 

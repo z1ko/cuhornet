@@ -41,6 +41,7 @@
 
 #include "HornetAlg.hpp"
 #include <BufferPool.cuh>
+#include <cuda_runtime_api.h>
 
 namespace hornets_nest {
 
@@ -78,7 +79,7 @@ public:
 private:
   BufferPool pool;
   TwoLevelQueue<vid_t> queue;
-  load_balancing::LogarthimRadixBinning32 load_balancing;
+  load_balancing::BinarySearch load_balancing;
 
   dist_t *d_distances{nullptr};
   vid_t bfs_source{0};
@@ -106,10 +107,15 @@ struct BFSOperatorAtomic { // deterministic
 
   OPERATOR(Vertex &vertex, Edge &edge) {
       //printf("Visiting %d -> %d\n", vertex.id(), edge.dst_id());
+
       auto dst = edge.dst_id();
       if (d_distances[dst] == INF) {
-          if (atomicCAS(d_distances + dst, INF, current_level) == INF)
+          if (atomicCAS(d_distances + dst, INF, current_level) == INF) {
               queue.insert(dst);
+
+              //printf("\tVertex %d is now at distance %d, added to queue\n", 
+              //  edge.dst_id(), current_level);
+          }
     }
   }
 };
@@ -122,7 +128,7 @@ struct BFSOperatorAtomic { // deterministic
 
 template <typename HornetGraph>
 BFSTOPDOWN2::BfsTopDown2(HornetGraph &hornet)
-    : StaticAlgorithm<HornetGraph>(hornet), queue(hornet, 5), load_balancing(hornet) {
+    : StaticAlgorithm<HornetGraph>(hornet), queue(hornet, 5), load_balancing(hornet, 5.0f) {
   pool.allocate(&d_distances, hornet.nV());
   reset();
 }

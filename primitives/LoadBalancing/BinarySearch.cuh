@@ -88,12 +88,7 @@ public:
 
 private:
     static const unsigned BLOCK_SIZE = 128;
-
-    mutable xlib::CubExclusiveSum<int> prefixsum;
-
-    //int* _d_work { nullptr };
     mutable thrust::device_vector<int> d_work;
-    //const size_t _work_size;
 };
 
 } // namespace load_balancing
