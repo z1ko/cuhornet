@@ -158,10 +158,6 @@ class BatchUpdate<
     void flip_resource(void) noexcept;
 
     template <typename... VertexMetaTypes>
-    void remove_graph_duplicates(
-            hornet::HornetDevice<TypeList<VertexMetaTypes...>, TypeList<EdgeMetaTypes...>, vid_t, degree_t>& hornet_device) noexcept;
-
-    template <typename... VertexMetaTypes>
     degree_t get_unique_sources_meta_data(
             vid_t * const batch_src,
             const degree_t nE,
@@ -211,6 +207,10 @@ class BatchUpdate<
         bool removeGraphDuplicates) noexcept;
 
     void remove_batch_duplicates(bool insert = true) noexcept;
+
+    template <typename... VertexMetaTypes>
+    void remove_graph_duplicates(
+            hornet::HornetDevice<TypeList<VertexMetaTypes...>, TypeList<EdgeMetaTypes...>, vid_t, degree_t>& hornet_device) noexcept;
 
     CSoAData<TypeList<vid_t, vid_t, EdgeMetaTypes...>, DeviceType::DEVICE>&
     in_edge(void) noexcept;

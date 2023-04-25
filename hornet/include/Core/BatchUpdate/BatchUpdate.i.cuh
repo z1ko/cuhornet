@@ -374,8 +374,10 @@ void
 BATCH_UPDATE::
 remove_graph_duplicates(
         hornet::HornetDevice<TypeList<VertexMetaTypes...>, TypeList<EdgeMetaTypes...>, vid_t, degree_t>& hornet_device) noexcept {
+
     if (_nE == 0) { return; }
     _nE = in_edge().get_num_items();
+
     //Get unique sources and degrees
     duplicate_flag.resize(_nE + 1);
     thrust::fill(duplicate_flag.begin(), duplicate_flag.end(), 1);
@@ -400,11 +402,24 @@ remove_graph_duplicates(
             duplicate_flag,
             total_work);
 
-    cub_prefixsum.run(duplicate_flag.data().get(), _nE);
+#if 0
+    thrust::host_vector<degree_t> h_duplicate_flag = duplicate_flag;
+    printf("[RGD] Duplicate flags:\n");
+    for(unsigned int i = 0; i < h_duplicate_flag.size(); i++)
+        printf("\t%3d | %d\n", i, h_duplicate_flag[i]);
+#endif
+
+    cub_prefixsum.run(duplicate_flag.data().get(), _nE + 1);
+
+#if 0
+    h_duplicate_flag = duplicate_flag;
+    printf("[RGD] Prefixsum:\n");
+    for(unsigned int i = 0; i < h_duplicate_flag.size(); i++)
+        printf("\t%3d | %d\n", i, h_duplicate_flag[i]);
+#endif
 
     _nE = duplicate_flag[duplicate_flag.size() - 1];
     write_unique_edges(in_edge(), out_edge(), duplicate_flag);
-
     flip_resource();
 }
 
@@ -434,6 +449,15 @@ get_unique_sources_meta_data(
             unique_degrees.begin() + unique_sources_count + 1,
             batch_offsets.begin());
 
+#if 0
+    thrust::host_vector<degree_t> h_unique_sources = unique_sources;
+    thrust::host_vector<degree_t> h_unique_degrees = unique_degrees;
+
+    printf("[RGD] batch unique sources with batch degrees:\n");
+    for (unsigned int i = 0; i < h_unique_sources.size(); i++)
+        printf("\t%d | source: %d, degree: %d\n", i, h_unique_sources[i], h_unique_degrees[i]);
+#endif
+
     //Find offsets to the adjacency lists of the sources in the batch graph
     cub_prefixsum.run(batch_offsets.data().get(), unique_sources_count + 1);
 
@@ -443,10 +467,23 @@ get_unique_sources_meta_data(
     //Get degrees of batch sources in hornet graph
     get_vertex_degrees(hornet_device, unique_sources, graph_offsets);
 
+#if 0
+    thrust::host_vector<degree_t> h_graph_offsets = graph_offsets;
+    printf("[RGD] batch unique sources with graph degrees:\n");
+    for (unsigned int i = 0; i < h_unique_sources.size(); i++)
+        printf("\t%d | source: %d, degree: %d\n", i, h_unique_sources[i], h_graph_offsets[i]);
+#endif
+
     cub_prefixsum.run(graph_offsets.data().get(), graph_offsets.size());
 
-    degree_t total_work = graph_offsets[graph_offsets.size() - 1];
+#if 0
+    h_graph_offsets = graph_offsets;
+    printf("[RGD] batch unique sources work:\n");
+    for (unsigned int i = 0; i < h_unique_sources.size() - 1; i++)
+        printf("\t%d | source: %d, work: %d\n", i, h_unique_sources[i], h_graph_offsets[i]);
+#endif
 
+    degree_t total_work = graph_offsets[graph_offsets.size() - 1];
     return total_work;
 }
 
@@ -609,8 +646,7 @@ markOverwriteSrcDst(
 
     degree_t total_work = batch_src_offsets[batch_src_offsets.size() - 1];
     const int BLOCK_SIZE = 256;
-    int smem = xlib::DeviceProperty::smem_per_block<degree_t>(BLOCK_SIZE);
-    int num_blocks = xlib::ceil_div(total_work, smem);
+    int num_blocks = xlib::ceil_div(total_work, BLOCK_SIZE);
     if (num_blocks != 0) {
     markOverwriteSrcDstKernel<BLOCK_SIZE>
         <<<num_blocks, BLOCK_SIZE>>>(
@@ -822,8 +858,7 @@ move_adjacency_lists(
     degree_t total_work = duplicate_flag[duplicate_flag.size() - 1];
     if (total_work != 0)  {
       const int BLOCK_SIZE = 256;
-      int smem = xlib::DeviceProperty::smem_per_block<degree_t>(BLOCK_SIZE);
-      int num_blocks = xlib::ceil_div(total_work, smem);
+      int num_blocks = xlib::ceil_div(total_work, BLOCK_SIZE);
       move_adjacency_lists_kernel<BLOCK_SIZE>
           <<<num_blocks, BLOCK_SIZE>>>(
                   hornet_device,
@@ -858,8 +893,7 @@ appendBatchEdges(hornet::HornetDevice<TypeList<VertexMetaTypes...>, TypeList<Edg
 
     degree_t * old_degree = graph_offsets.data().get();
     const int BLOCK_SIZE = 256;
-    int smem = xlib::DeviceProperty::smem_per_block<degree_t>(BLOCK_SIZE);
-    int num_blocks = xlib::ceil_div(total_work, smem);
+    int num_blocks = xlib::ceil_div(total_work, BLOCK_SIZE);
     appendBatchEdgesKernel<BLOCK_SIZE>
         <<<num_blocks, BLOCK_SIZE>>>(
                 hornet_device,

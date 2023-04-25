@@ -58,10 +58,14 @@ void mark_duplicate_edges_kernel(
                             end - start,
                             dst);
                     if ((found >= 0) && (dst == batch_dst_ids[start + found])) {
+
+                        printf("\t\tfound duplicate edge: %d -> %d\n",
+                               e.src_id(), e.dst_id());
+
                         duplicate_flag[start + found] = 0;
                     }
                 };
-    xlib::binarySearchLB<BLOCK_SIZE>(graph_offsets, graph_offsets_count, smem, lambda);
+    xlib::simpleBinarySearchLB<BLOCK_SIZE>(graph_offsets, graph_offsets_count, smem, lambda);
 }
 
 template <int BLOCK_SIZE, typename HornetDeviceT, typename vid_t, typename degree_t>
@@ -95,7 +99,7 @@ void markOverwriteSrcDstKernel(
         source_edges_offset[start + offset] = erase_cutoff + offset;
     };
 
-    xlib::binarySearchLB<BLOCK_SIZE>(batch_src_offsets, batch_src_offsets_count, smem, lambda);
+    xlib::simpleBinarySearchLB<BLOCK_SIZE>(batch_src_offsets, batch_src_offsets_count, smem, lambda);
 }
 
 //Sets false to all locations in duplicate_flag if the corresponding batch_dst_ids
@@ -111,8 +115,7 @@ void mark_duplicate_edges(
         rmm::device_vector<degree_t>& duplicate_flag,
         const degree_t total_work) {
     const unsigned BLOCK_SIZE = 128;
-    int smem = xlib::DeviceProperty::smem_per_block<degree_t>(BLOCK_SIZE);
-    int num_blocks = xlib::ceil_div(total_work, smem);
+    int num_blocks = xlib::ceil_div(total_work, BLOCK_SIZE);
     mark_duplicate_edges_kernel<BLOCK_SIZE>
         <<< num_blocks, BLOCK_SIZE >>>(
                 hornet,
@@ -224,7 +227,7 @@ void move_adjacency_lists_kernel(
         EdgePtrT n_eptr(new_ref. template get<1>(), new_ref. template get<3>());
         n_eptr[new_ref. template get<2>() + offset] = r_eptr[realloc_ref. template get<2>() + offset];
     };
-    xlib::binarySearchLB<BLOCK_SIZE>(graph_offsets, graph_offsets_count, smem, lambda);
+    xlib::simpleBinarySearchLB<BLOCK_SIZE>(graph_offsets, graph_offsets_count, smem, lambda);
 }
 
 template <typename vid_t, typename degree_t, typename VAccessPtr, typename VMetaData>
@@ -264,7 +267,7 @@ void appendBatchEdgesKernel(
         auto vertex = hornet.vertex(unique_src_ids[pos]);
         vertex.edge(old_degree[pos] + offset) = batch_edges[batch_offsets[pos] + offset];
     };
-    xlib::binarySearchLB<BLOCK_SIZE>(batch_offsets, batch_offsets_count, smem, lambda);
+    xlib::simpleBinarySearchLB<BLOCK_SIZE>(batch_offsets, batch_offsets_count, smem, lambda);
 }
 
 template <int BLOCK_SIZE, typename HornetDeviceT, typename vid_t, typename degree_t>
@@ -303,7 +306,7 @@ void locate_erased_edges_kernel(
                         }
                     }
                 };
-    xlib::binarySearchLB<BLOCK_SIZE>(graph_offsets, graph_offsets_count, smem, lambda);
+    xlib::simpleBinarySearchLB<BLOCK_SIZE>(graph_offsets, graph_offsets_count, smem, lambda);
 }
 
 //Sets false to all locations in duplicatnEcorresponding batch_dst_ids
@@ -320,8 +323,7 @@ void locate_erased_edges(
         rmm::device_vector<degree_t>& erase_edge_location,
         const degree_t total_work) {
     const unsigned BLOCK_SIZE = 128;
-    int smem = xlib::DeviceProperty::smem_per_block<degree_t>(BLOCK_SIZE);
-    int num_blocks = xlib::ceil_div(total_work, smem);
+    int num_blocks = xlib::ceil_div(total_work, BLOCK_SIZE);
     batch_erase_flag.resize(batch_dst_degrees.size());
     erase_edge_location.resize(batch_dst_degrees.size());
     thrust::fill(batch_erase_flag.begin(), batch_erase_flag.end(), 0);
