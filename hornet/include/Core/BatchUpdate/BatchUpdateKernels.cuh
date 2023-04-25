@@ -58,10 +58,6 @@ void mark_duplicate_edges_kernel(
                             end - start,
                             dst);
                     if ((found >= 0) && (dst == batch_dst_ids[start + found])) {
-
-                        printf("\t\tfound duplicate edge: %d -> %d\n",
-                               e.src_id(), e.dst_id());
-
                         duplicate_flag[start + found] = 0;
                     }
                 };

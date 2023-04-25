@@ -86,6 +86,9 @@ public:
     template<typename HornetClass, typename Operator>
     void apply(HornetClass& hornet, const Operator& op) const noexcept;
 
+    template<typename HornetClass, typename Operator, template<typename> typename Update, typename vid_t>
+    void apply(HornetClass& hornet, Update<vid_t>& batch, const Operator& op, bool reverse = false);
+
 private:
     static const unsigned BLOCK_SIZE = 128;
     mutable thrust::device_vector<int> d_work;

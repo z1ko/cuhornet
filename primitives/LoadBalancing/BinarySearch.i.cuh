@@ -120,5 +120,19 @@ void BinarySearch::apply(HornetClass& hornet, const Operator& op)
     apply<HornetClass, Operator, int>(hornet, nullptr, (int) hornet.nV(), op);
 }
 
+template<typename HornetClass, typename Operator, template<typename> typename Update, typename vid_t>
+void BinarySearch::apply(HornetClass& hornet, Update<vid_t>& batch, const Operator& op, bool reverse) {
+
+    auto soa_ptr = batch.in_edge().get_soa_ptr();
+    vid_t *d_input;
+
+    if (reverse)
+        d_input = soa_ptr.template get<1>();
+    else
+        d_input = soa_ptr.template get<0>();
+
+    apply<HornetClass, Operator, vid_t>(hornet, d_input, batch.size(), op);
+}
+
 } // namespace load_balancing
 } // namespace hornets_nest
