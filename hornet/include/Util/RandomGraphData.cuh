@@ -241,15 +241,19 @@ template <typename vid_t, typename degree_t, typename... EdgeMetaTypes>
 typename std::enable_if<(0 == sizeof...(EdgeMetaTypes)),
 COO<DeviceType::DEVICE, vid_t, TypeList<EdgeMetaTypes...>, degree_t>>::type
 generateRandomCOO(vid_t nV, degree_t size, RandomGenTraits<TypeList<EdgeMetaTypes...>> t) {
+  
   COO<DeviceType::DEVICE, vid_t, TypeList<EdgeMetaTypes...>, degree_t> coo(size);
   thrust::device_ptr<vid_t> src(coo.srcPtr());
   thrust::device_ptr<vid_t> dst(coo.dstPtr());
-  thrust::counting_iterator<degree_t> index_sequence_begin(t.seed);
-  thrust::transform(index_sequence_begin,
-      index_sequence_begin + size,
+  
+  thrust::counting_iterator<degree_t> index_sequence_src_begin(t.seed);
+  thrust::transform(index_sequence_src_begin,
+      index_sequence_src_begin + size,
       src, RFunc<degree_t>(0, nV - 1));
-  thrust::transform(index_sequence_begin,
-      index_sequence_begin + size,
+
+  thrust::counting_iterator<degree_t> index_sequence_dst_begin(t.seed);
+  thrust::transform(index_sequence_dst_begin,
+      index_sequence_dst_begin + size,
       dst, RFunc<degree_t>(0, nV - 1));
   return coo;
 }

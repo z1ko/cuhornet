@@ -66,7 +66,7 @@ namespace gpu {
         src[offsets[pos] + eOffset] = pos;
     };
 
-    xlib::binarySearchLB<BLOCK_SIZE>(offsets, hornet.nV() + 1, smem, lambda);
+    xlib::simpleBinarySearchLB<BLOCK_SIZE>(offsets, hornet.nV() + 1, smem, lambda);
   }
 
   template <typename... VertexMetaTypes, typename... EdgeMetaTypes, typename vid_t, typename degree_t>
@@ -139,8 +139,7 @@ namespace gpu {
 
     HornetDeviceT hornet_device = device();
     const int BLOCK_SIZE = 256;
-    int smem = xlib::DeviceProperty::smem_per_block<degree_t>(BLOCK_SIZE);
-    int num_blocks = xlib::ceil_div(nE(), smem);
+    int num_blocks = xlib::ceil_div(nE(), BLOCK_SIZE);
     flattenCOOKernel<BLOCK_SIZE><<<num_blocks, BLOCK_SIZE>>>(hornet_device, degree.data().get(), coo_data.get_soa_ptr());
 
     if (sortAdjacencyList) {

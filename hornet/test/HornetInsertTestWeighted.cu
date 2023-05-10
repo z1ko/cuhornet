@@ -51,6 +51,7 @@ int exec(int argc, char* argv[]) {
     hornet::RandomGenTraits<TypeList<wgt0_t, wgt1_t>> cooGenTraits;
     auto randomBatch = hornet::generateRandomCOO<vert_t, eoff_t>(graph.nV(), batch_size, cooGenTraits);
     Update batch_update(randomBatch);
+    batch_update.print();
 
     printf("ne: %d\n", hornet_gpu.nE());
     std::cout<<"=======\n";
@@ -64,7 +65,7 @@ int exec(int argc, char* argv[]) {
     TM.print("Insertion " + std::to_string(batch_size) + ":  ");
 
     auto inst_coo = hornet_gpu.getCOO(true);
-    init_coo.append(randomBatch);
+    //init_coo.append(randomBatch);
     init_coo.sort();
 
     std::cout<<"Creating multimap for testing correctness...";

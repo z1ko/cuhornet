@@ -22,10 +22,10 @@ using vert_t = int;
 using eoff_t = int;
 using wgt0_t = int;
 using wgt1_t = float;
-using Init = hornet::HornetInit<vert_t, hornet::EMPTY, hornet::TypeList<wgt0_t, wgt1_t>>;
-using HornetGPU = hornet::gpu::Hornet<vert_t, hornet::EMPTY, hornet::TypeList<wgt0_t, wgt1_t>>;
-using UpdatePtr = hornet::BatchUpdatePtr<vert_t, hornet::TypeList<wgt0_t, wgt1_t>, hornet::DeviceType::HOST>;
-using Update = hornet::gpu::BatchUpdate<vert_t, hornet::TypeList<wgt0_t, wgt1_t>>;
+using Init = hornet::HornetInit<vert_t>;
+using HornetGPU = hornet::gpu::Hornet<vert_t>;
+using UpdatePtr = hornet::BatchUpdatePtr<vert_t, hornet::EMPTY, hornet::DeviceType::HOST>;
+using Update = hornet::gpu::BatchUpdate<vert_t>;
 using hornet::TypeList;
 using hornet::DeviceType;
 
@@ -36,46 +36,94 @@ int exec(int argc, char* argv[]) {
     using namespace graph::structure_prop;
     using namespace graph::parsing_prop;
 
+    int batch_size = std::stoi(argv[2]);
     graph::GraphStd<vert_t, vert_t> graph;
     graph.read(argv[1]);
-    int batch_size = std::stoi(argv[2]);
+
+    std::cout << "Initializing hornet ... ";
     Init hornet_init(graph.nV(), graph.nE(), graph.csr_out_offsets(), graph.csr_out_edges());
+    HornetGPU device_graph(hornet_init);
+    std::cout << "done\n";
 
-    //Use meta with hornet_init
-    std::vector<wgt0_t> edge_meta_0(graph.nE(), 0);
-    std::vector<wgt1_t> edge_meta_1(graph.nE(), 1);
-    hornet_init.insertEdgeData(edge_meta_0.data(), edge_meta_1.data());
-    HornetGPU hornet_gpu(hornet_init);
-    auto init_coo = hornet_gpu.getCOO(true);
-
-    hornet::RandomGenTraits<TypeList<wgt0_t, wgt1_t>> cooGenTraits;
+    std::cout << "Generating update batch (size: " << batch_size << ") ... ";
+    hornet::RandomGenTraits<hornet::EMPTY> cooGenTraits;
     auto randomBatch = hornet::generateRandomCOO<vert_t, eoff_t>(graph.nV(), batch_size, cooGenTraits);
+    std::cout << "done\n";
+
+    std::cout << "Batch edges:\n";
     Update batch_update(randomBatch);
+    batch_update.print();
 
-    printf("ne: %d\n", hornet_gpu.nE());
-    std::cout<<"=======\n";
-    Timer<DEVICE> TM(3);
-    TM.start();
-    //hornet_gpu.insert(batch_update);  <--- Removed
-    TM.stop();
+    std::cout << "Applying batch to host COO ... ";
+    auto base_coo = device_graph.getCOO(true);
+    base_coo.append(randomBatch);
+    base_coo.sort();
+    std::cout << "done\n";
 
-    printf("ne: %d\n", hornet_gpu.nE());
-    std::cout<<"=======\n";
-    TM.print("Insertion " + std::to_string(batch_size) + ":  ");
+    std::cout << "Applying batch to device graph and retriving COO ... ";
+    device_graph.insert(batch_update);
+    auto device_coo = device_graph.getCOO(true);
+    device_coo.sort();
+    std::cout << "done\n";
 
-    auto inst_coo = hornet_gpu.getCOO(true);
-    init_coo.append(randomBatch); // <--- Not Removed
-    init_coo.sort();
+    std::cout << "Creating multimaps for testing correctness ... ";
+    std::multimap<vert_t, TypeList<vert_t>> base_coo_map   = getHostMMap(base_coo);
+    std::multimap<vert_t, TypeList<vert_t>> device_coo_map = getHostMMap(device_coo);
+    std::cout << "done\n";
 
-    std::cout<<"Creating multimap for testing correctness...";
-    auto init_coo_map = getHostMMap(init_coo);
-    auto inst_coo_map = getHostMMap(inst_coo);
+#if 0
+    std::cout << "Base COO:\n"; 
+    vert_t current_key = -1;
+    for (auto it = base_coo_map.begin(); it != base_coo_map.end(); it++) {
+    
+      // Visit each key only once
+      if (current_key == it->first) continue;
+      else current_key = it->first;
+    
+      std::cout << current_key << " : ";
+      auto key_values = base_coo_map.equal_range(current_key);
+      for (auto val_it = key_values.begin(); val_it != key_values.end(); val_it++)
+        std::cout << val_it->second << "\n";
+    }
+
+    std::cout << "Device COO:\n"; 
+    current_key = -1;
+    for (auto it = device_coo_map.begin(); it != device_coo_map.end(); it++) {
+    
+      // Visit each key only once
+      if (current_key == it->first) continue;
+      else current_key = it->first;
+    
+      std::cout << current_key << " : ";
+      auto key_values = device_coo_map.equal_range(current_key);
+      for (auto val_it = key_values.begin(); val_it != key_values.end(); val_it++)
+        std::cout << val_it->second << "\n";
+    }
+#endif
+
+    std::cout << "Initial size: "  << base_coo_map.size() 
+              << ", Device size: " << device_coo_map.size() 
+              << "\n";
+
+#if 0
+    auto base_it   = base_coo_map.begin();
+    auto device_it = device_coo_map.begin();
+    
+    while (init_it != init_coo_map.end() && inst_it != inst_coo_map.end()) {
+
+       
+
+      init_it++;
+      inst_it++;
+    }
+#else
     std::cout<<"...Done!\n";
-    if (inst_coo_map == inst_coo_map) { // <--- They should be different, but still passes
+    if (base_coo_map == device_coo_map) {
       std::cout<<"Passed\n";
     } else {
       std::cout<<"Failed\n";
     }
+#endif
 
     return 0;
 }

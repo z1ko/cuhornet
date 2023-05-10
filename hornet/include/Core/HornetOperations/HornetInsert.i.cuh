@@ -47,20 +47,32 @@ reallocate_vertices(gpu::BatchUpdate<vid_t, TypeList<EdgeMetaTypes...>, degree_t
     batch.get_reallocate_vertices_meta_data(
             hornet_device, h_realloc_v_data, h_new_v_data, d_realloc_v_data, d_new_v_data, reallocated_vertices_count, is_insert);
 
+    printf("reallocated_vertices_count: %d\n", reallocated_vertices_count);
+
     PEEK_LAST_STATUS()
     for (degree_t i = 0; i < reallocated_vertices_count; i++) {
+       
+        // Alloc new block for the vertex, and change host access access data
+        //printf("Allocating new memory for vertex...\n");  
+
         auto ref = h_new_v_data[i];
         auto access_data = _ba_manager.insert(ref.template get<0>());
+
         ref.template get<1>() = access_data.edge_block_ptr;;
         ref.template get<2>() = access_data.vertex_offset;
         ref.template get<3>() = access_data.edges_per_block;
     }
 
     ////Move adjacency list and edit vertex access data
+    //printf("Moving adjacency lists of reallocated vertices\n");
     batch.move_adjacency_lists(hornet_device, _vertex_data.get_soa_ptr(), h_realloc_v_data, h_new_v_data, d_realloc_v_data, d_new_v_data, reallocated_vertices_count, is_insert);
 
     PEEK_LAST_STATUS()
     for (degree_t i = 0; i < reallocated_vertices_count; i++) {
+
+        // Remove old data
+        //printf("Deallocating old memory for vertex...\n");
+
         auto ref = h_realloc_v_data[i];
         if (ref.template get<0>() != 0) {
           _ba_manager.remove(ref.template get<0>(), ref.template get<1>(), ref.template get<2>());
