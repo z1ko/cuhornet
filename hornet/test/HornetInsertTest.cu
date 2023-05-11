@@ -48,11 +48,13 @@ int exec(int argc, char* argv[]) {
     auto randomBatch = hornet::generateRandomCOO<vert_t, eoff_t>(graph.nV(), batch_size, cooGenTraits);
     Update batch_update(randomBatch);
 
+#if 0
     printf("Generated batch: \n");
     batch_update.print();
 
     printf("Graph before update:\n");
     hornet_gpu.print();
+#endif
 
     printf("ne: %d\n", hornet_gpu.nE());
     std::cout<<"=======\n";
@@ -65,15 +67,17 @@ int exec(int argc, char* argv[]) {
     std::cout<<"=======\n";
     TM.print("Insertion " + std::to_string(batch_size) + ":  ");
 
+#if 0
     printf("Graph after update:\n");
     hornet_gpu.print();
+#endif
 
     auto inst_coo = hornet_gpu.getCOO();
     init_coo.append(randomBatch);
     init_coo.sort();
     inst_coo.sort();
 
-#if 1
+#if 0
     hornet::COO<DeviceType::HOST, vert_t, hornet::EMPTY, eoff_t> host_init_coo = init_coo;
     hornet::COO<DeviceType::HOST, vert_t, hornet::EMPTY, eoff_t> host_inst_coo = inst_coo;
 
