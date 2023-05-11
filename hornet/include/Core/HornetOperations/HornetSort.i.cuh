@@ -52,7 +52,8 @@ void invalidateEdges(
     vid_t * dst = vertex.neighbor_ptr() + vertex.degree();
     dst[edge_offset] = max_vertex;
   };
-  xlib::binarySearchLB<BLOCK_SIZE>(offsets, offsets_count, smem, lambda);
+
+  xlib::simpleBinarySearchLB<BLOCK_SIZE>(offsets, offsets_count, smem, lambda);
 
 }
 
@@ -81,9 +82,7 @@ sort(void) {
   degree_t number_of_edges = offsets[_nV];
   HornetDeviceT hornet_device = device();
   const int BLOCK_SIZE = 256;
-  int smem = xlib::DeviceProperty::smem_per_block<degree_t>(BLOCK_SIZE);
-  int num_blocks = xlib::ceil_div(number_of_edges, smem);
-
+  int num_blocks = xlib::ceil_div(_nE, BLOCK_SIZE);
   if (num_blocks == 0) { return; }
   vid_t max = std::numeric_limits<vid_t>::max();
   invalidateEdges<BLOCK_SIZE><<<num_blocks, BLOCK_SIZE>>>(hornet_device,
