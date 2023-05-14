@@ -222,7 +222,12 @@ void move_adjacency_lists_kernel(
         EdgePtrT r_eptr(realloc_ref. template get<1>(), realloc_ref. template get<3>());
         EdgePtrT n_eptr(new_ref. template get<1>(), new_ref. template get<3>());
         n_eptr[new_ref. template get<2>() + offset] = r_eptr[realloc_ref. template get<2>() + offset];
+
+#if 0
+        printf("Reallocated vertex: %d\n", pos);
+#endif
     };
+
     xlib::simpleBinarySearchLB<BLOCK_SIZE>(graph_offsets, graph_offsets_count, smem, lambda);
 }
 
@@ -261,8 +266,18 @@ void appendBatchEdgesKernel(
 
     const auto& lambda = [&] (int pos, degree_t offset) {
         auto vertex = hornet.vertex(unique_src_ids[pos]);
-        vertex.edge(old_degree[pos] + offset) = batch_edges[batch_offsets[pos] + offset];
+
+        auto old_edge = vertex.edge(old_degree[pos] + offset);
+        vertex.edge(old_degree[pos] + offset) = batch_edges[batch_offsets[pos] + offset]; 
+        auto new_edge = vertex.edge(old_degree[pos] + offset);
+#if 0
+        printf("Pos: %d, Vertex: %d, Offset: %d, changed from (%d -> %d) to (%d -> %d)\n", 
+            pos, vertex.id(), offset, 
+            old_edge.src_id(), old_edge.dst_id(),
+            new_edge.src_id(), new_edge.dst_id());
+#endif
     };
+
     xlib::simpleBinarySearchLB<BLOCK_SIZE>(batch_offsets, batch_offsets_count, smem, lambda);
 }
 

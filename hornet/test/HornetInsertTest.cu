@@ -42,11 +42,19 @@ int exec(int argc, char* argv[]) {
     Init hornet_init(graph.nV(), graph.nE(), graph.csr_out_offsets(), graph.csr_out_edges());
 
     HornetGPU hornet_gpu(hornet_init);
-    auto init_coo = hornet_gpu.getCOO(true);
+    auto init_coo = hornet_gpu.getCOO();
 
-    hornet::RandomGenTraits<hornet::EMPTY> cooGenTraits;
+    hornet::RandomGenTraits<hornet::EMPTY> cooGenTraits(true, false, 100);
     auto randomBatch = hornet::generateRandomCOO<vert_t, eoff_t>(graph.nV(), batch_size, cooGenTraits);
     Update batch_update(randomBatch);
+
+#if 0
+    printf("Generated batch: \n");
+    batch_update.print();
+
+    printf("Graph before update:\n");
+    hornet_gpu.print();
+#endif
 
     printf("ne: %d\n", hornet_gpu.nE());
     std::cout<<"=======\n";
@@ -59,58 +67,80 @@ int exec(int argc, char* argv[]) {
     std::cout<<"=======\n";
     TM.print("Insertion " + std::to_string(batch_size) + ":  ");
 
-    auto inst_coo = hornet_gpu.getCOO(true);
+#if 0
+    printf("Graph after update:\n");
+    hornet_gpu.print();
+#endif
+
+    auto inst_coo = hornet_gpu.getCOO();
     init_coo.append(randomBatch);
     init_coo.sort();
+    inst_coo.sort();
 
-    hornet_gpu.sort();
-
+#if 1
     hornet::COO<DeviceType::HOST, vert_t, hornet::EMPTY, eoff_t> host_init_coo = init_coo;
     hornet::COO<DeviceType::HOST, vert_t, hornet::EMPTY, eoff_t> host_inst_coo = inst_coo;
 
     auto *s = host_init_coo.srcPtr();
     auto *d = host_init_coo.dstPtr();
+    
     auto *S = host_inst_coo.srcPtr();
     auto *D = host_inst_coo.dstPtr();
+    
     auto len = host_init_coo.size();
-    bool err = false;
+    std::cout << "Edge count: " << len << std::endl;
+
     if (host_inst_coo.size() != host_init_coo.size()) {
-      err = true;
-      std::cerr<<"\nInit Size "<<host_init_coo.size()<<" != Combined size "<<host_inst_coo.size()<<"\n";
-      len = std::min(host_init_coo.size(), host_inst_coo.size());
-    }
-    for (int i = 0; i < len; ++i) {
-      if ((s[i] != S[i]) || (d[i] != D[i])) {
-        err = true;
-        std::cout<<"ERR : ";
-        std::cout<<s[i]<<" "<<d[i]<<"\t";
-        std::cout<<"\t\t";
-        std::cout<<S[i]<<" "<<D[i];
-        std::cout<<"\n";
-      }
-    }
-    if (!err) {
-      std::cout<<"PASSED\n";
-    } else {
-      std::cout<<"NOT PASSED\n";
+      std::cout << "\nInit Size "<< host_init_coo.size() << " != Combined size " << host_inst_coo.size() << "\n";
+      return -1;
     }
 
-    return 0;
+    bool valid = true;
+    int counter = 0;
+    for (int i = 0; i < len; i++) {
+      bool error = (s[i] != S[i]) || (d[i] != D[i]); 
+      if (error) valid = false;
 
-    /*
+#if 0
+      printf("%5d -> %5d | %5d -> %5d => %s\n",
+          s[i], d[i], S[i], D[i], error ? "ERROR" : "OK");
+#endif
+
+      counter += 1;
+    }
+
+    std::cout << "Effective size: " << counter << std::endl;
+    std::cout << (valid ? "PASSED" : "NOT PASSED") 
+              << std::endl;
+
+#else
+    using mapT = std::multimap<vert_t, TypeList<vert_t>>;
+    
     std::cout<<"Creating multimap for testing correctness...";
-    auto init_coo_map = getHostMMap(init_coo);
-    auto inst_coo_map = getHostMMap(inst_coo);
+    mapT init_coo_map = getHostMMap(init_coo);
+    mapT inst_coo_map = getHostMMap(inst_coo);
     std::cout<<"...Done!\n";
 
-    if (inst_coo_map == inst_coo_map) {
-        std::cout<<"Passed\n";
-    } else {
-        std::cout<<"Failed\n";
-    }
+    std::set<mapT::value_type> init_set(init_coo_map.begin(), init_coo_map.end());
+    std::set<mapT::value_type> inst_set(inst_coo_map.begin(), inst_coo_map.end());
+    
+    mapT result;
+    std::set_symmetric_difference(init_set.begin(), init_set.end(),
+                                  inst_set.begin(), inst_set.end(),
+                                  std::inserter(result, result.end()));
+    
+    if (result.size() == 0)
+      std::cout << "PASSED\n";
+    else {
 
+      std::cout << "NOT PASSED, symmetric_difference:\n";
+      for (auto it = result.begin(); it != result.end(); it++) {
+        std::cout << it->first << " -> " << std::get<0>(it->second) << "\n";
+      }
+
+    }
+#endif
     return 0;
-    */
 }
 
 int main(int argc, char* argv[]) {

@@ -8,6 +8,9 @@ include(../compiler-util/CMakeLists.txt)
 # Necessary to disable a warning about an unrecognized gcc pragma instruction
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcudafe \"--diag_suppress=1675\"")
 
+# Create compilation units database
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 ###################################################################################################
 # - include paths ---------------------------------------------------------------------------------
 
@@ -36,7 +39,7 @@ endif()
 
 add_executable(hornet_mgpu_insert_test                      test/HornetMultiGPUInsertTest.cu)
 add_executable(hornet_insert_weighted_test                  test/HornetInsertTestWeighted.cu)
-add_executable(hornet_insert_weighted_test_modified         test/HornetInsertTestWeighted.cu)
+add_executable(hornet_insert_weighted_test_modified         test/HornetInsertTestWeightedModified.cu)
 add_executable(hornet_insert_test                           test/HornetInsertTest.cu)
 add_executable(hornet_delete_test                           test/HornetDeleteTest.cu)
 
