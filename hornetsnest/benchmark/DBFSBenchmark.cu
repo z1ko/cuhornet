@@ -25,22 +25,18 @@ namespace test {
 
     int exec(int argc, char** argv) {
 
-        /**
-         * Strange bug using also inverse graph, edges are not updated correctly, for now we use only undirected graphs...
-         */
-
         int batch_size = std::stoi(argv[2]);
-        graph::GraphStd<vert_t, vert_t> host_graph(UNDIRECTED);
+        graph::GraphStd<vert_t, vert_t> host_graph;
         host_graph.read(argv[1]);
 
         HornetInit graph_init{host_graph.nV(), host_graph.nE(), host_graph.csr_out_offsets(), host_graph.csr_out_edges()};
         HornetGraph device_graph{graph_init};
 
         // Load inverse graph into the device
-        //HornetInit graph_init_inv{host_graph.nV(), host_graph.nE(), host_graph.csr_in_offsets(), host_graph.csr_in_edges()};
-        //HornetGraph device_graph_inv{graph_init};
+        HornetInit graph_init_inv{host_graph.nV(), host_graph.nE(), host_graph.csr_in_offsets(), host_graph.csr_in_edges()};
+        HornetGraph device_graph_inv{graph_init};
 
-        DynamicBFS<HornetGraph> DBFS{device_graph, device_graph/*device_graph_inv*/};
+        DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv};
         DBFS.set_source(device_graph.max_degree_id());
         DBFS.run();
 
@@ -66,12 +62,11 @@ namespace test {
             HornetBatchUpdate update_dst_src{update_dst_src_ptr};
 
             device_graph.insert(update_src_dst, true, true);
-            device_graph.insert(update_dst_src, true, true);
-            //sdevice_graph_inv.insert(update_dst_src, true, true);
+            device_graph_inv.insert(update_dst_src, true, true);
 
             // Apply update
             TM.start();
-            DBFS.batchUpdate(batch_src, batch_dst, batch_size);
+            DBFS.update(batch_src, batch_dst, batch_size);
             TM.stop();
 
             auto stats = DBFS.get_stats();
@@ -98,7 +93,7 @@ namespace test {
         mean /= static_cast<float>(times.size());
 
         printf("============================================================\n");
-        printf("Mean DBFS update time: %f (success rate: %float)\n",
+        printf("Mean DBFS update time: %f (success rate: %f)\n",
                mean, static_cast<float>(times.size()) / static_cast<float>(benchmarks_count));
 
         return 0;

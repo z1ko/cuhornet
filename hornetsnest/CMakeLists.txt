@@ -5,6 +5,8 @@ project(${PROJECT} LANGUAGES CXX CUDA)
 
 include(../compiler-util/CMakeLists.txt)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 #add_subdirectory(../hornet build)
 
 ###################################################################################################
@@ -34,7 +36,7 @@ file(GLOB_RECURSE X_SRCS        ${PROJECT_SOURCE_DIR}/../xlib/src/*)
 file(GLOB_RECURSE H_SRCS        ${PROJECT_SOURCE_DIR}/../hornet/src/*)
 
 #add_library(hornetAlg ${X_SRCS} ${H_SRCS} ${DUMMY} ${BFS_SRCS} ${BC_SRCS} ${BC_SRCS2} ${BC_SRCS3} ${BUBFS_SRC} ${CC_SRCS} ${CLCOEFF_SRCS} ${SSSP_SRCS} ${SPMV_SRCS} ${PR_SRCS} ${KCORE_SRCS} ${TRI2_SRCS})
-add_library(hornetAlg ${X_SRCS} ${H_SRCS} ${DUMMY} ${SPMV_SRCS} ${TRI2_SRCS})
+add_library(hornetAlg ${X_SRCS} ${H_SRCS} ${DUMMY} ${SPMV_SRCS} ${TRI2_SRCS} include/HornetAlg.hpp)
 
 target_link_libraries(hornetAlg ${RMM_LIBRARY})
 

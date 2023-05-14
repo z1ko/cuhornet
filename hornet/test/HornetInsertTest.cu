@@ -77,7 +77,7 @@ int exec(int argc, char* argv[]) {
     init_coo.sort();
     inst_coo.sort();
 
-#if 0
+#if 1
     hornet::COO<DeviceType::HOST, vert_t, hornet::EMPTY, eoff_t> host_init_coo = init_coo;
     hornet::COO<DeviceType::HOST, vert_t, hornet::EMPTY, eoff_t> host_inst_coo = inst_coo;
 
@@ -92,22 +92,28 @@ int exec(int argc, char* argv[]) {
 
     if (host_inst_coo.size() != host_init_coo.size()) {
       std::cout << "\nInit Size "<< host_init_coo.size() << " != Combined size " << host_inst_coo.size() << "\n";
-      //return 0;
+      return -1;
     }
 
+    bool valid = true;
     int counter = 0;
     for (int i = 0; i < len; i++) {
       bool error = (s[i] != S[i]) || (d[i] != D[i]); 
+      if (error) valid = false;
+
+#if 0
       printf("%5d -> %5d | %5d -> %5d => %s\n",
           s[i], d[i], S[i], D[i], error ? "ERROR" : "OK");
+#endif
 
       counter += 1;
     }
 
     std::cout << "Effective size: " << counter << std::endl;
+    std::cout << (valid ? "PASSED" : "NOT PASSED") 
+              << std::endl;
 
-#endif
-
+#else
     using mapT = std::multimap<vert_t, TypeList<vert_t>>;
     
     std::cout<<"Creating multimap for testing correctness...";
@@ -133,7 +139,7 @@ int exec(int argc, char* argv[]) {
       }
 
     }
-
+#endif
     return 0;
 }
 
