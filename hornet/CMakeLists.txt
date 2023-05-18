@@ -42,10 +42,12 @@ add_executable(hornet_insert_weighted_test                  test/HornetInsertTes
 add_executable(hornet_insert_weighted_test_modified         test/HornetInsertTestWeightedModified.cu)
 add_executable(hornet_insert_test                           test/HornetInsertTest.cu)
 add_executable(hornet_delete_test                           test/HornetDeleteTest.cu)
+add_executable(hornet_stream_test                           test/HornetStreamTest.cu)
 
 target_link_libraries(hornet_mgpu_insert_test               hornet)
 target_link_libraries(hornet_insert_weighted_test           hornet)
 target_link_libraries(hornet_insert_test                    hornet)
 target_link_libraries(hornet_delete_test                    hornet)
 target_link_libraries(hornet_insert_weighted_test_modified  hornet)
+target_link_libraries(hornet_stream_test                    hornet)
 
