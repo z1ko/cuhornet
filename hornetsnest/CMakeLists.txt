@@ -85,3 +85,8 @@ target_link_libraries(dbfs      hornetAlg)
 
 add_executable(dbfs_benchmark benchmark/DBFSBenchmark.cu)
 target_link_libraries(dbfs_benchmark hornetAlg)
+
+add_executable(bfs2_benchmark benchmark/BFS2Benchmark.cu)
+target_link_libraries(bfs2_benchmark hornetAlg)
+
+

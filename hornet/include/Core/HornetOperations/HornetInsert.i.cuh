@@ -47,7 +47,7 @@ reallocate_vertices(gpu::BatchUpdate<vid_t, TypeList<EdgeMetaTypes...>, degree_t
     batch.get_reallocate_vertices_meta_data(
             hornet_device, h_realloc_v_data, h_new_v_data, d_realloc_v_data, d_new_v_data, reallocated_vertices_count, is_insert);
 
-    printf("reallocated_vertices_count: %d\n", reallocated_vertices_count);
+    //printf("reallocated_vertices_count: %d\n", reallocated_vertices_count);
 
     PEEK_LAST_STATUS()
     for (degree_t i = 0; i < reallocated_vertices_count; i++) {

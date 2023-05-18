@@ -767,7 +767,7 @@ void BATCH_UPDATE::move_adjacency_lists(
   }
   PEEK_LAST_STATUS()
   degree_t total_work = duplicate_flag[duplicate_flag.size() - 1];
-  printf("Move adj lists total work: %d\n", total_work);
+  //printf("Move adj lists total work: %d\n", total_work);
 
   if (total_work != 0) {
     const int BLOCK_SIZE = 256;
@@ -815,7 +815,7 @@ void BATCH_UPDATE::appendBatchEdges(
 
   cub_prefixsum.run(unique_degrees.data().get(), unique_degrees.size());
   degree_t total_work = unique_degrees[unique_degrees.size() - 1];
-  printf("Total appendBatchEdges work:%d\n", total_work);
+  //printf("Total appendBatchEdges work:%d\n", total_work);
   
   degree_t *old_degree = graph_offsets.data().get();
 

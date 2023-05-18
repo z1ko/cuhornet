@@ -19,9 +19,14 @@ class DynamicBFS : public StaticAlgorithm<HornetGraph> {
 public:
 
     // Contains useful statistics
-    struct Stats {
-        int total_frontier_expansions { 0 };
-        int total_visited_vertices { 0 };
+    struct Stats 
+    {
+        int total_frontier_expansions;
+        int total_visited_vertices;
+        float frontier_size_mean;
+        int frontier_size_max;
+        int frontier_size_min;
+        int initial_dynamic_frontier_size;
     };
 
 public:
@@ -37,6 +42,8 @@ public:
     dist_t get_current_level() const;
     Stats get_stats() const;
     dist_t* get_host_distance_vector() const;
+
+    void set_device_distance_vector(int* distances);
 
     /// @brief Process the inserted or removed edges to generate an updated distance array
     void update(const vert_t* src_vertices, const vert_t* dst_vertices, int count);
@@ -168,7 +175,7 @@ struct DynamicExpandEdge {
 
 template<typename HornetGraph>
 DynamicBFS<HornetGraph>::DynamicBFS(HornetGraph& graph, HornetGraph& parent_graph)
-: StaticAlgorithm<HornetGraph>{graph}, _load_balancing{graph}, _frontier{graph}, _graph{graph}, _parent_graph{parent_graph}
+: StaticAlgorithm<HornetGraph>{graph}, _load_balancing{graph}, _frontier{graph, 20.0f}, _graph{graph}, _parent_graph{parent_graph}
 {
     _buffer_pool.allocate(&_distances, _graph.nV());
     reset();
@@ -180,13 +187,16 @@ DynamicBFS<HornetGraph>::~DynamicBFS() { }
 template<typename HornetGraph>
 void DynamicBFS<HornetGraph>::set_source(vert_t source) {
     _source = source;
-    _frontier.insert(_source);
-    gpu::memsetZero(_distances + _source);
 }
 
 template<typename HornetGraph>
 dist_t DynamicBFS<HornetGraph>::get_current_level() const {
     return _current_level;
+}
+
+template<typename HornetGraph>
+void DynamicBFS<HornetGraph>::set_device_distance_vector(int* distances) {
+  cudaMemcpy(_distances, distances, _graph.nV(), cudaMemcpyDeviceToDevice); 
 }
 
 template<typename HornetGraph>
@@ -206,6 +216,13 @@ void DynamicBFS<HornetGraph>::reset()
 {
     _current_level = 1;
     _frontier.clear();
+
+    _stats.total_frontier_expansions = 0;
+    _stats.total_visited_vertices = 0;
+    _stats.frontier_size_mean = 0.0f;
+    _stats.frontier_size_max = -1;
+    _stats.frontier_size_min = 10000000;
+    _stats.initial_dynamic_frontier_size = 0;
 
     dist_t* distances = _distances;
     forAllnumV(StaticAlgorithm<HornetGraph>::hornet, [=] __device__(int i) {
@@ -239,6 +256,9 @@ void DynamicBFS<HornetGraph>::print_parents(vert_t vertex) {
 template<typename HornetGraph>
 void DynamicBFS<HornetGraph>::run()
 {
+    _frontier.insert(_source);
+    gpu::memsetZero(_distances + _source);
+    
     assert(_frontier.size() != 0);
     while (_frontier.size() != 0) {
 
@@ -272,32 +292,35 @@ void DynamicBFS<HornetGraph>::update(BatchUpdate& batch) {
 template<typename HornetGraph>
 void DynamicBFS<HornetGraph>::update(const vert_t* src_vertices, const vert_t* dst_vertices, int count)
 {
-    _stats.total_frontier_expansions = 0;
-    _stats.total_visited_vertices = 0;
-
     // Find smallest parent
-    //printf("VERTEX UPDATE =============================\n");
     _frontier.insert(dst_vertices, count);
     forAllEdges(_parent_graph, _frontier, VertexUpdate { _distances, _frontier }, _load_balancing);
     _frontier.swap();
 
     // Propagate change to all nodes
+    _stats.initial_dynamic_frontier_size = _frontier.size();
     while (_frontier.size() > 0) {
+        const int frontier_size = _frontier.size();
 
-        cudaDeviceSynchronize();
-        //printf("DYNAMIC EXPANSION =========================\n");
-        //printf("Expanding frontier with %d nodes\n", _frontier.size());
+        _stats.frontier_size_max = std::max(_stats.frontier_size_max, frontier_size);
+        _stats.frontier_size_min = std::min(_stats.frontier_size_min, frontier_size);
 
+        _stats.total_visited_vertices += frontier_size;
         _stats.total_frontier_expansions += 1;
-        _stats.total_visited_vertices += _frontier.size();
 
+        // Propagate new distances
         forAllEdges(_graph, _frontier, DynamicExpandEdge {  _distances, _frontier }, _load_balancing);
         _frontier.swap();
     }
+
+    _stats.frontier_size_mean = 
+      _stats.total_visited_vertices / static_cast<float>(_stats.total_frontier_expansions);
 }
 
 template<typename HornetGraph>
-void DynamicBFS<HornetGraph>::release() { }
+void DynamicBFS<HornetGraph>::release() {
+    gpu::free(_distances, _graph.nV());
+}
 
 template<typename HornetGraph>
 bool DynamicBFS<HornetGraph>::validate() 
@@ -328,11 +351,13 @@ bool DynamicBFS<HornetGraph>::validate()
     // They must be the same
     int error_count = 0;
     for (int i = 0; i < nV; i++) {
+        
+        // If the nbfs distance is INF then the node is not in reachable from source
         if (nbfs_host_distances[i] != INF && nbfs_host_distances[i] != dbfs_host_distances[i]) {
             error_count += 1;
             printf("[%6d] vertex %6d | nbfs: %6d, dbfs: %6d\n",
                    error_count, i, nbfs_host_distances[i], dbfs_host_distances[i]);
-#if 1
+#if 0
             if (error_count >= 10) {
                 printf("... and other errors\n");
                 break;

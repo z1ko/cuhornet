@@ -4,6 +4,7 @@
 */
 
 #include <iostream>
+#include <cmath>
 
 #include <StandardAPI.hpp>
 #include <Graph/GraphStd.hpp>
@@ -43,10 +44,16 @@ void generateEvilBatch(vert_t* src, vert_t* dst, int batch_size, dist_t* dist, i
 
 int exec(int argc, char** argv) {
 
-    int batch_size = std::stoi(argv[2]);
-    graph::GraphStd<vert_t, vert_t> host_graph;
-    host_graph.read(argv[1], PRINT_INFO | RM_SINGLETON);
+    graph::GraphStd<vert_t, vert_t> host_graph(ENABLE_INGOING);
+    host_graph.read(argv[1], PRINT_INFO);
 
+    int batch_size = 100000;
+    if (getenv("BATCH_SIZE")) {
+        char buffer[16 + 1];
+        snprintf(buffer, 16, "%s", getenv("BATCH_SIZE"));
+        batch_size = std::stoi(buffer);
+    }
+    
     HornetInit graph_init{host_graph.nV(),
                           host_graph.nE(),
                           host_graph.csr_out_offsets(),
@@ -58,14 +65,10 @@ int exec(int argc, char** argv) {
                               host_graph.csr_in_edges()};
 
     HornetGraph device_graph{graph_init};
-    // TODO: Inverse graph is not updated correctly, for now use undirected graph
     HornetGraph device_graph_inv{graph_init_inv};
     DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv};
 
     vert_t source = device_graph.max_degree_id();
-    if (argc == 4)
-        source = std::stoi(argv[3]);
-
     DBFS.set_source(source);
     DBFS.run();
 
@@ -143,6 +146,7 @@ int exec(int argc, char** argv) {
     timer::Timer<timer::DEVICE> TM;
     TM.start();
     DBFS.update(batch_src, batch_dst, batch_size);
+    cudaDeviceSynchronize();
     TM.stop();
 
     auto stats = DBFS.get_stats();
@@ -151,6 +155,10 @@ int exec(int argc, char** argv) {
     printf("Update time: %f\n", TM.duration());
     printf("Total expanded frontiers: %d\n", stats.total_frontier_expansions);
     printf("Total visited vertices: %d\n", stats.total_visited_vertices);
+    printf("Initial dynamic frontier size: %d\n", stats.initial_dynamic_frontier_size);
+    printf("Mean frontier size: %f\n", stats.frontier_size_mean);
+    printf("Max frontier size: %d\n", stats.frontier_size_max);
+    printf("Min frontier size: %d\n", stats.frontier_size_min);
 
     printf("===================================\n");
     bool valid = DBFS.validate();

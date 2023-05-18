@@ -152,7 +152,7 @@ void BFSTOPDOWN2::set_parameters(vid_t source, int load_balancing) {
 }
 
 template <typename HornetGraph> void BFSTOPDOWN2::run() {
-  printf("bfs_source = %d\n", bfs_source);
+  //printf("bfs_source = %d\n", bfs_source);
   while (queue.size() > 0) {
 
       //printf("Expanding queue of %d nodes\n", queue.size());
