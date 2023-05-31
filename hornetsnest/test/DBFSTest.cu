@@ -139,7 +139,7 @@ int exec(int argc, char** argv) {
 
     // =======================================================================
 
-    DBFS.update(batch_dst, batch_size);
+    DBFS.update(update_src_dst);
 
     printf("===================================\n");
     bool valid = DBFS.validate();

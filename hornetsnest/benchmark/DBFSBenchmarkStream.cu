@@ -52,8 +52,8 @@ namespace test {
             */
 
             // Force minimum level of the edge source
-            if (minimum != -1 && dist[src_id] < minimum)
-              continue;
+            //if (minimum != -1 && dist[src_id] < minimum)
+            //  continue;
 
             src[i] = src_id;
             dst[i] = dst_id;
@@ -140,11 +140,12 @@ namespace test {
           vert_t* batch_src = new vert_t[batch_size];
           vert_t* batch_dst = new vert_t[batch_size];
 
+          DynamicBFS<HornetGraph> DBFS{device_graph, device_graph /*device_graph_inv*/, 5000000};
           for (int benchmark = 0; benchmark < benchmarks_count; benchmark++) {
             std::cout << "batch_size: "  << batch_size << ", benchmark: " << benchmark
                       << std::endl;
 
-            DynamicBFS<HornetGraph> DBFS{device_graph, device_graph /*device_graph_inv*/, 5000000};
+            DBFS.reset();
             DBFS.set_source(device_graph.max_degree_id());
             DBFS.run();
 

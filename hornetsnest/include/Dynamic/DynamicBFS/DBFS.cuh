@@ -139,24 +139,26 @@ struct PrintNeighbours {
 // Find the smallest parent of the vertex
 struct VertexUpdate {
 
-    dist_t *distances;
+    dist_t *read_distances;
+    dist_t *write_distances;
+
     TwoLevelQueue<vert_t> frontier;
 
     OPERATOR(Vertex& vertex, Edge& edge) {
-        printf("Analyzing edge %d[d: %d] -> %d[d: %d] for best father\n",
-               vertex.id(), distances[vertex.id()], edge.dst_id(), distances[edge.dst_id()]);
+        //printf("Analyzing edge %d[d: %d] -> %d[d: %d] for best father\n",
+        //       vertex.id(), read_distances[vertex.id()], edge.dst_id(), read_distances[edge.dst_id()]);
 
 #if 1
         // WORKING VERSION
         
-        const int distance = distances[vertex.id()];
-        if (distances[edge.dst_id()] < distance - 1) {
-            if (atomicMin(&distances[vertex.id()], distances[edge.dst_id()] + 1) == distance) {
+        const int distance = read_distances[vertex.id()];
+        if (read_distances[edge.dst_id()] < distance - 1) {
+            if (atomicMin(&write_distances[vertex.id()], read_distances[edge.dst_id()] + 1) == distance) {
               frontier.insert(vertex.id());
             }
 
-            printf("\tNew smallest father for %d[d: %d]: %d[d: %d]\n",
-                   vertex.id(), distances[vertex.id()], edge.dst_id(), distances[edge.dst_id()]);
+            //printf("\tNew smallest father for %d: %d at distance %d\n",
+            //       vertex.id(), edge.dst_id(), read_distances[edge.dst_id()]);
         }
 #else
         atomicMin(&distances[vertex.id()], distances[edge.dst_id()] + 1);
@@ -167,24 +169,32 @@ struct VertexUpdate {
 // Foreach node children overwrite old distance if we are closer
 struct DynamicExpandEdge {
 
-    dist_t* distances;
+    dist_t* read_distances;
+    dist_t* write_distances;
+
     TwoLevelQueue<vert_t> frontier;
 
     OPERATOR(Vertex& vertex, Edge& edge) {
-        printf("Dynamic expand from %d[%d] -> %d[%d]\n",
-               vertex.id(), distances[vertex.id()], edge.dst_id(), distances[edge.dst_id()]);
+        //printf("Dynamic expand from %d[%d] -> %d[%d]\n",
+        //       vertex.id(), read_distances[vertex.id()], edge.dst_id(), read_distances[edge.dst_id()]);
 
 #if 1
         // WORKING VERSION
 
-        const int distance = distances[edge.dst_id()];
-        if (distance - distances[vertex.id()] > 1) {
-            if (atomicMin(&distances[edge.dst_id()], distances[vertex.id()] + 1) == distance) {
-              frontier.insert(edge.dst_id()); // <-- TODO: Solve duplicate nodes problems
+        const int our_dist = read_distances[vertex.id()];
+        const int dst_dist = read_distances[edge.dst_id()];
+
+        const int delta = dst_dist - our_dist;
+        if (delta > 1) {
+
+            // Modify distance of destination node, if the operation returns our read value
+            // then we must add to queue
+            if (atomicMin(&write_distances[edge.dst_id()], our_dist + 1) == dst_dist) {
+              frontier.insert(edge.dst_id());
             }
 
-            printf("\tNode %d has been updated to distance %d and added to frontier\n",
-                   edge.dst_id(), distances[edge.dst_id()]);
+            //printf("\tNode %d has been updated to distance %d\n",
+            //       edge.dst_id(), our_dist + 1);
         }
 #else
         const dist_t old_distance = distances[edge.dst_id()];
@@ -244,6 +254,11 @@ dist_t* DynamicBFS<HornetGraph>::current_distances() {
 }
 
 template<typename HornetGraph>
+dist_t* DynamicBFS<HornetGraph>::write_distances() {
+  return _distances[!_current_distance_vector];
+}
+
+template<typename HornetGraph>
 void DynamicBFS<HornetGraph>::swap_distances() {
   _current_distance_vector = !_current_distance_vector;
 }
@@ -251,11 +266,10 @@ void DynamicBFS<HornetGraph>::swap_distances() {
 // Copy the content of the 'from' vector to the 'to' vector
 __global__ void sync_distances_kernel(const dist_t* from, dist_t* to, int size) {
 
-    int stride = blockDim.x;
-    int  start = blockIdx.x * stride + threadIdx.x;
-    int    end = start + stride;
+    int stride = blockDim.x * gridDim.x;
+    int  start = blockIdx.x * blockDim.x + threadIdx.x;
 
-    for (auto i = start; i < end; i += stride) {
+    for (auto i = start; i < size; i += stride) {
         to[i] = from[i]; 
     }
 }
@@ -265,8 +279,8 @@ void DynamicBFS<HornetGraph>::sync_distances() {
   dist_t* src_distances = _distances[_current_distance_vector];
   dist_t* dst_distances = _distances[!_current_distance_vector];
 
-  int block_count = xlib::ceil_div<1024>(size);
-  sync_distances_kernel<<<block_count, 1024>>>(src_distances, dst_vertices, _graph.nV());
+  int block_count = xlib::ceil_div<1024>(_graph.nV());
+  sync_distances_kernel<<<block_count, 1024>>>(src_distances, dst_distances, _graph.nV());
 }
 
 template <typename HornetGraph> 
@@ -308,7 +322,7 @@ template<typename HornetGraph>
 void DynamicBFS<HornetGraph>::run()
 {
     _frontier.insert(_source);
-    gpu::memsetZero(_distances + _source);
+    gpu::memsetZero(current_distances() + _source);
     
     assert(_frontier.size() != 0);
     while (_frontier.size() != 0) {
@@ -366,6 +380,9 @@ void DynamicBFS<HornetGraph>::update(BatchUpdate& batch) {
   template<typename HornetGraph>
 void DynamicBFS<HornetGraph>::update(const vert_t* dst_vertices, int count)
 {
+    // Sync the distance vectors
+    sync_distances();
+
     // Used to benchmark all code parts
     timer::Timer<timer::DEVICE> section_timer;
 
@@ -378,9 +395,12 @@ void DynamicBFS<HornetGraph>::update(const vert_t* dst_vertices, int count)
 
     // Find smallest parent
     _frontier.insert(dst_vertices, count);
-    forAllEdges(_parent_graph, _frontier, VertexUpdate { current_distances(), _frontier }, _load_balancing);
-    
-    // TODO Swap distance vectors
+    forAllEdges(_parent_graph, _frontier, 
+        VertexUpdate { current_distances(), write_distances(), _frontier }, 
+        _load_balancing);
+
+    swap_distances();
+    sync_distances();
     _frontier.swap();
 
     section_timer.stop();
@@ -404,8 +424,13 @@ void DynamicBFS<HornetGraph>::update(const vert_t* dst_vertices, int count)
 #endif
 
         // Propagate new distances
-        forAllEdges(_graph, _frontier, DynamicExpandEdge { current_distances(), _frontier }, _load_balancing);
-        // TODO Swap distance vectors
+        forAllEdges(_graph, _frontier, 
+            DynamicExpandEdge { current_distances(), write_distances(), _frontier }, 
+            _load_balancing);
+
+        swap_distances();
+        sync_distances();
+        
         _frontier.swap();
     }
     

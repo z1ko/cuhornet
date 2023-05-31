@@ -34,6 +34,7 @@ namespace test {
             vert_t src_id = rand() % dist_size;
             vert_t dst_id = rand() % dist_size;
 
+            /*
             while(dist[src_id] == INF || dist[dst_id] - dist[src_id] < delta) {
                 
                 // Force minimum level of the edge source
@@ -43,6 +44,7 @@ namespace test {
                 src_id = rand() % dist_size;
                 dst_id = rand() % dist_size;
             }
+            */
 
             src[i] = src_id;
             dst[i] = dst_id;
@@ -130,6 +132,7 @@ namespace test {
                           << std::endl;
             }
             else {
+                std::cout << "ERROR!\n";
                 break;
             }
 
