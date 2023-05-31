@@ -671,7 +671,7 @@ void forAllEdgesBatch(HornetClass& hornet,
                       hornet::gpu::BatchUpdate<VT>& batch_update,
                       const Operator& op) {
 
-    auto size = batch_update.in_edge().get_num_items();
+    auto size = batch_update.size();
     auto in_ptr  = batch_update.in_edge().get_soa_ptr();
 
     VT * batch_src = in_ptr.template get<0>();
