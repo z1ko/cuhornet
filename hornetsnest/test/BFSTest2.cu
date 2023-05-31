@@ -45,8 +45,21 @@ int exec(int argc, char* argv[]) {
 
     TM.stop();
     cudaProfilerStop();
-    TM.print("TopDown2");
+    TM.print("TopDown2 I");
 
+    cudaProfilerStart();
+
+    bfs_top_down.reset();
+    bfs_top_down.set_parameters(root);
+
+    TM.start();
+
+    bfs_top_down.run();
+
+    TM.stop();
+    cudaProfilerStop();
+    TM.print("TopDown2 II");
+    
     std::cout << "Number of levels is : " << bfs_top_down.getLevels() << std::endl;
 
     auto is_correct = bfs_top_down.validate();

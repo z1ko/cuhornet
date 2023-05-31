@@ -76,10 +76,8 @@ target_link_libraries(hornetAlg ${RMM_LIBRARY})
 #add_executable(dkatz    test/KatzDynamicTest.cu)
 add_executable(bfs2     test/BFSTest2.cu)
 add_executable(dbfs     test/DBFSTest.cu)
-add_executable(neigh    test/NeighboursTest.cu)
 
 #target_link_libraries(dkatz     hornetAlg)
-target_link_libraries(neigh     hornetAlg)
 target_link_libraries(bfs2      hornetAlg)
 target_link_libraries(dbfs      hornetAlg)
 
@@ -89,4 +87,5 @@ target_link_libraries(dbfs_benchmark hornetAlg)
 add_executable(bfs2_benchmark benchmark/BFS2Benchmark.cu)
 target_link_libraries(bfs2_benchmark hornetAlg)
 
-
+add_executable(dbfs_benchmark_stream benchmark/DBFSBenchmarkStream.cu)
+target_link_libraries(dbfs_benchmark_stream hornetAlg)

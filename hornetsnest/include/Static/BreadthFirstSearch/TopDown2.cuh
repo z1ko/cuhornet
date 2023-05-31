@@ -119,6 +119,13 @@ struct BFSOperatorAtomic { // deterministic
     }
   }
 };
+
+struct Printer {
+  OPERATOR(Vertex &vertex) {
+    printf("%d ", vertex.id());
+  }
+};
+
 //------------------------------------------------------------------------------
 /////////////////
 // BfsTopDown2 //
@@ -152,8 +159,15 @@ void BFSTOPDOWN2::set_parameters(vid_t source, int load_balancing) {
 }
 
 template <typename HornetGraph> void BFSTOPDOWN2::run() {
-  //printf("bfs_source = %d\n", bfs_source);
   while (queue.size() > 0) {
+
+#if 0
+    // Print all nodes in the queue
+    printf("%6d | ", current_level);
+    forAllVertices(StaticAlgorithm<HornetGraph>::hornet, queue, Printer { });
+    cudaDeviceSynchronize();
+    printf("\n");
+#endif
 
       //printf("Expanding queue of %d nodes\n", queue.size());
     forAllEdges(StaticAlgorithm<HornetGraph>::hornet, queue,
@@ -163,7 +177,6 @@ template <typename HornetGraph> void BFSTOPDOWN2::run() {
     queue.swap();
     current_level++;
   }
-  // std::cout << "Number of levels is : " << current_level << std::endl;
 }
 
 template <typename HornetGraph> void BFSTOPDOWN2::release() {

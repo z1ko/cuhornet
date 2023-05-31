@@ -32,10 +32,12 @@ void generateEvilBatch(vert_t* src, vert_t* dst, int batch_size, dist_t* dist, i
         vert_t src_id = rand() % dist_size;
         vert_t dst_id = rand() % dist_size;
 
-        while(dist[dst_id] == INF || dist[dst_id] - dist[src_id] < delta) {
+        /*
+        while(dist[src_id] == INF || dist[dst_id] - dist[src_id] < delta) {
             src_id = rand() % dist_size;
             dst_id = rand() % dist_size;
         }
+        */
 
         src[i] = src_id;
         dst[i] = dst_id;
@@ -46,14 +48,8 @@ int exec(int argc, char** argv) {
 
     graph::GraphStd<vert_t, vert_t> host_graph(ENABLE_INGOING);
     host_graph.read(argv[1], PRINT_INFO);
+    int batch_size = std::stoi(argv[2]);
 
-    int batch_size = 100000;
-    if (getenv("BATCH_SIZE")) {
-        char buffer[16 + 1];
-        snprintf(buffer, 16, "%s", getenv("BATCH_SIZE"));
-        batch_size = std::stoi(buffer);
-    }
-    
     HornetInit graph_init{host_graph.nV(),
                           host_graph.nE(),
                           host_graph.csr_out_offsets(),
@@ -66,7 +62,7 @@ int exec(int argc, char** argv) {
 
     HornetGraph device_graph{graph_init};
     HornetGraph device_graph_inv{graph_init_inv};
-    DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv};
+    DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv, 5000000};
 
     vert_t source = device_graph.max_degree_id();
     DBFS.set_source(source);
@@ -83,7 +79,7 @@ int exec(int argc, char** argv) {
     cudaMalloc(&dev_batch_dst, sizeof(vert_t) * batch_size);
 
     printf("Generating batch of %d edges\n", batch_size);
-#if 1
+#if 0
     generateBatch(host_graph, batch_size, batch_src, batch_dst, BatchGenType::INSERT, batch_gen_property::UNIQUE);
 
     /*
@@ -143,26 +139,19 @@ int exec(int argc, char** argv) {
 
     // =======================================================================
 
-    timer::Timer<timer::DEVICE> TM;
-    TM.start();
-    DBFS.update(batch_src, batch_dst, batch_size);
-    cudaDeviceSynchronize();
-    TM.stop();
-
-    auto stats = DBFS.get_stats();
-
-    printf("===================================\n");
-    printf("Update time: %f\n", TM.duration());
-    printf("Total expanded frontiers: %d\n", stats.total_frontier_expansions);
-    printf("Total visited vertices: %d\n", stats.total_visited_vertices);
-    printf("Initial dynamic frontier size: %d\n", stats.initial_dynamic_frontier_size);
-    printf("Mean frontier size: %f\n", stats.frontier_size_mean);
-    printf("Max frontier size: %d\n", stats.frontier_size_max);
-    printf("Min frontier size: %d\n", stats.frontier_size_min);
+    DBFS.update(batch_dst, batch_size);
 
     printf("===================================\n");
     bool valid = DBFS.validate();
     printf("Validation result: %d\n", valid);
+    
+    printf("==================================\n");
+    auto stats = DBFS.get_stats();
+    std::cout << "frontier_expansions_count"  << stats.frontier_expansions_count
+              << "initial_frontier_size"      << stats.initial_frontier_size
+              << "vertex_update_time"         << stats.vertex_update_time
+              << "expansion_time"             << stats.expansion_time
+              << std::endl;
 
     return 0;
 }
