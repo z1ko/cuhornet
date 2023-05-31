@@ -31,44 +31,65 @@ namespace test {
 
         HornetInit graph_init{host_graph.nV(), host_graph.nE(), host_graph.csr_out_offsets(), host_graph.csr_out_edges()};
         HornetGraph device_graph{graph_init};
+        
+        // Insert batch to increment size
+        int batch_size = std::stoi(argv[2]);
+        
+        vert_t* batch_src = new vert_t[batch_size];
+        vert_t* batch_dst = new vert_t[batch_size];
 
         timer::Timer<timer::DEVICE> TM;
-        std::vector<float> measures;
-  
-        cudaEvent_t start, stop;
 
-        int benchmarks_count = std::stoi(argv[2]);
+        const char SEPARATOR = '\t';
+        std::cerr << "seq"        << SEPARATOR 
+                  << "bfs_time"   << SEPARATOR 
+                  << "bfs_level"  << std::endl;
+
+        int benchmarks_count = std::stoi(argv[3]);
         for (int benchmark = 0; benchmark < benchmarks_count; benchmark++) {
+
+#if 1
+            generateBatch(host_graph, batch_size, batch_src, batch_dst, 
+                BatchGenType::INSERT, batch_gen_property::UNIQUE);
             
+            HornetBatchUpdatePtr update_ptr{batch_size, batch_src, batch_dst};
+            HornetBatchUpdate update{update_ptr};
+            update.sort();
+
+            device_graph.insert(update, true, true);
+#endif
+
             BfsTopDown2<HornetGraph> BFS(device_graph);
             BFS.set_parameters(device_graph.max_degree_id());
-            
-            cudaEventCreate(&start);
-            cudaEventCreate(&stop);
 
-            cudaEventRecord(start);
+            TM.start();
             BFS.run();
-            cudaEventRecord(stop);
+            TM.stop();
+    
+            // Remove batch of the direct edges
+            auto update_soa_ptr = update.in_edge().get_soa_ptr();
+            HornetBatchUpdatePtr update_erase_ptr{update.size(), 
+              update_soa_ptr.template get<0>(), update_soa_ptr.template get<1>()};
 
-            cudaEventSynchronize(stop);
-            float duration;
-            cudaEventElapsedTime(&duration, start, stop);
+            HornetBatchUpdate update_erase{update_erase_ptr};
+            update_erase.sort();
 
-            cudaEventDestroy(start);
-            cudaEventDestroy(stop);
+            device_graph.erase(update_erase); 
 
-            measures.push_back(duration);
-            std::cout << "elapsed: " << duration << "\n";
+            int levels = BFS.getLevels();
+            float duration = TM.duration();
+
+            std::cerr << benchmark << SEPARATOR
+                      << duration  << SEPARATOR
+                      << levels    << std::endl;
 
             BFS.release();
         }
 
-        float elapsed_mean = 0.0f;
-        for (float measure : measures)
-          elapsed_mean += measure;
-        elapsed_mean /= static_cast<float>(measures.size());
+        std::cout << "BFS mean time: "          << TM.average() 
+                  << "BFS standard deviation: " << TM.std_deviation() 
+                  << "\n";
 
-        std::cout << "BFS mean time: " << elapsed_mean << "\n";
         return 0;
     }
 

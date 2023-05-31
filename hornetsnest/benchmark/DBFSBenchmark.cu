@@ -26,10 +26,29 @@ namespace test {
     using HornetBatchUpdatePtr = hornet::BatchUpdatePtr<vert_t, hornet::EMPTY, hornet::DeviceType::HOST>;
     using HornetBatchUpdate = hornet::gpu::BatchUpdate<vert_t>;
 
-    struct benchmark_measure {
-      DynamicBFS<HornetGraph>::Stats stats;
-      float elapsed;
-    };
+    // Generate a batch that requires an expansion
+    void generateEvilBatch(vert_t* src, vert_t* dst, int batch_size, dist_t* dist, int dist_size, int delta, int minimum = -1) {
+        srand(time(0));
+        for(int i = 0; i < batch_size; i++) {
+
+            vert_t src_id = rand() % dist_size;
+            vert_t dst_id = rand() % dist_size;
+
+            while(dist[src_id] == INF || dist[dst_id] - dist[src_id] < delta) {
+                
+                // Force minimum level of the edge source
+                if (minimum != -1 && dist[src_id] < minimum)
+                  continue;
+                
+                src_id = rand() % dist_size;
+                dst_id = rand() % dist_size;
+            }
+
+            src[i] = src_id;
+            dst[i] = dst_id;
+        }
+    }
+
 
     int exec(int argc, char** argv) {
 
@@ -38,16 +57,15 @@ namespace test {
         host_graph.read(argv[1]);
 
         // CSV Header
-        char SEPARATOR = ' ';
-        std::cerr << "update_time"                        << SEPARATOR
-                  << "expanded_frontiers"                 << SEPARATOR
-                  << "visited_vertices"                   << SEPARATOR
-                  << "post_vertex_update_frontier_size"   << SEPARATOR
-                  << "mean_frontier_size"                 << SEPARATOR
-                  << "max_frontier_size"                  << SEPARATOR
-                  << "min_frontier_size"                  << SEPARATOR
+        char SEPARATOR = '\t';
+        std::cerr << "frontier_expansions_count"  << SEPARATOR
+                  << "initial_frontier_size"      << SEPARATOR
+                  << "vertex_update_time"         << SEPARATOR
+                  << "expansion_time"             << SEPARATOR
+                  << "dbfs_time"                  << SEPARATOR
                   << std::endl;
       
+
 #if 0
         // This is used to precompute the base BFS distances only one time
         int* distances = nullptr;
@@ -63,68 +81,53 @@ namespace test {
         }
 #endif
         
-        timer::Timer<timer::DEVICE> TM;
-        std::vector<benchmark_measure> measures;
-  
+        HornetInit graph_init{host_graph.nV(), host_graph.nE(), host_graph.csr_out_offsets(), host_graph.csr_out_edges()};
+        HornetInit graph_init_inv{host_graph.nV(), host_graph.nE(), host_graph.csr_in_offsets(), host_graph.csr_in_edges()};
+        
+        timer::Timer<timer::DEVICE> timer;
+
         vert_t* batch_src = new vert_t[batch_size];
         vert_t* batch_dst = new vert_t[batch_size];
 
         int benchmarks_count = std::stoi(argv[3]);
         for (int benchmark = 0; benchmark < benchmarks_count; benchmark++) {
             
-            HornetInit graph_init{host_graph.nV(), host_graph.nE(), host_graph.csr_out_offsets(), host_graph.csr_out_edges()};
             HornetGraph device_graph{graph_init};
-
-            HornetInit graph_init_inv{host_graph.nV(), host_graph.nE(), host_graph.csr_in_offsets(), host_graph.csr_in_edges()};
             HornetGraph device_graph_inv{graph_init_inv};
 
-            DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv};
+            DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv, 5000000};
             DBFS.set_source(device_graph.max_degree_id());
             DBFS.run();
-            
-            generateBatch(host_graph, batch_size, batch_src, batch_dst, BatchGenType::INSERT, batch_gen_property::UNIQUE);
 
-            // From src to dst
-            HornetBatchUpdatePtr update_ptr{batch_size, batch_src, batch_dst};
-            HornetBatchUpdate update{update_ptr};
+            auto *distances = DBFS.get_host_distance_vector();
+            generateEvilBatch(batch_src, batch_dst, batch_size, distances, device_graph.nV(), 2);
+            delete[] distances;
 
-            // From dst to src
-            HornetBatchUpdatePtr update_ptr_inv{batch_size, batch_dst, batch_src};
-            HornetBatchUpdate update_inv{update_ptr_inv};
+            HornetBatchUpdate update{HornetBatchUpdatePtr{batch_size, batch_src, batch_dst}};
+            HornetBatchUpdate update_inv{HornetBatchUpdatePtr{batch_size, batch_dst, batch_src}};
             
             // Insert update into the graph
-            device_graph.insert(update, true, true);
-            device_graph_inv.insert(update_inv, true, true);
+            device_graph.insert(update);
+            device_graph_inv.insert(update_inv);
 
             // Apply dynamic BFS update
-            TM.start();
-            DBFS.update(batch_src, batch_dst, batch_size);
-            cudaDeviceSynchronize();
-            TM.stop();
+            timer.start();
+            DBFS.update(batch_dst, batch_size);
+            timer.stop();
 
+            timer.print("DBFS");
+
+            bool valid = DBFS.validate();
             auto stats = DBFS.get_stats();
 
-            // They seem to work fine... make this faster by not checking correctess
-            bool valid = true; //DBFS.validate();
-
             if (valid) {
-                float elapsed = TM.duration();
-
                 // CSV Data
-                std::cerr << elapsed                             << SEPARATOR
-                          << stats.total_frontier_expansions     << SEPARATOR
-                          << stats.total_visited_vertices        << SEPARATOR
-                          << stats.initial_dynamic_frontier_size << SEPARATOR
-                          << stats.frontier_size_mean            << SEPARATOR
-                          << stats.frontier_size_max             << SEPARATOR
-                          << stats.frontier_size_min             << SEPARATOR
+                std::cerr << stats.frontier_expansions_count     << SEPARATOR
+                          << stats.initial_frontier_size         << SEPARATOR
+                          << stats.vertex_update_time            << SEPARATOR
+                          << stats.expansion_time                << SEPARATOR
+                          << timer.duration()                    << SEPARATOR
                           << std::endl;
-#if 0
-                printf("===================================\n");
-                printf("Update time: %f\n", elapsed);
-                printf("Total expanded frontiers: %d\n", stats.total_frontier_expansions);
-                printf("Total visited vertices: %d\n", stats.total_visited_vertices);
-#endif
             }
             else {
                 break;
