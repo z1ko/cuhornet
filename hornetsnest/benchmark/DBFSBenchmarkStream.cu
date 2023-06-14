@@ -115,6 +115,7 @@ namespace test {
         //HornetInit graph_init_inv{host_graph.nV(), host_graph.nE(), host_graph.csr_in_offsets(), host_graph.csr_in_edges()};
         //HornetGraph device_graph_inv{graph_init_inv};
 
+        /*
         BfsTopDown2<HornetGraph> BFS(device_graph);
         BFS.set_parameters(device_graph.max_degree_id());
         BFS.run();
@@ -124,6 +125,7 @@ namespace test {
         auto* base_distances = new dist_t[nV];
         gpu::copyToHost(BFS.get_distance_vector(), nV, base_distances);
         BFS.release();
+        */
 
         timer::Timer<timer::DEVICE> device_timer;
         timer::Timer<timer::HOST> host_timer;
@@ -140,19 +142,17 @@ namespace test {
           vert_t* batch_src = new vert_t[batch_size];
           vert_t* batch_dst = new vert_t[batch_size];
 
-          DynamicBFS<HornetGraph> DBFS{device_graph, device_graph /*device_graph_inv*/, 5000000};
           for (int benchmark = 0; benchmark < benchmarks_count; benchmark++) {
             std::cout << "batch_size: "  << batch_size << ", benchmark: " << benchmark
                       << std::endl;
 
-            DBFS.reset();
+            DynamicBFS<HornetGraph> DBFS{device_graph, device_graph};
             DBFS.set_source(device_graph.max_degree_id());
             DBFS.run();
 
             host_timer.start();
-            generateEvilBatch(batch_src, batch_dst, batch_size, base_distances, device_graph.nV(), 
+            generateEvilBatch(batch_src, batch_dst, batch_size, nullptr, device_graph.nV(), 
                 batch_delta, minimum_batch_level, maximum_batch_level);
-
             host_timer.stop();
 
             // Insert direct edges
@@ -160,13 +160,12 @@ namespace test {
             device_graph.insert(update, true, true); 
 
             // Insert parent edges
-            HornetBatchUpdate update_inv{HornetBatchUpdatePtr{batch_size, batch_dst, batch_src}};
-            //device_graph_inv.insert(update_inv, true, true);
-            device_graph.insert(update_inv, true, true);
+            //HornetBatchUpdate update_inv{HornetBatchUpdatePtr{batch_size, batch_dst, batch_src}};
+            //device_graph.insert(update_inv, true, true);
 
             // Apply dynamic BFS update
             device_timer.start();
-            DBFS.update(batch_dst, batch_size);
+            DBFS.update(update);
             device_timer.stop();
 
             bool valid = DBFS.validate();
@@ -181,13 +180,12 @@ namespace test {
             device_graph.erase(update_erase); 
 
             // Remove batch of parent edges
-            auto update_inv_soa_ptr = update_inv.in_edge().get_soa_ptr();
-            HornetBatchUpdatePtr update_inv_erase_ptr{update_inv.size(),
-              update_inv_soa_ptr.template get<0>(), update_inv_soa_ptr.template get<1>()};
+            //auto update_inv_soa_ptr = update_inv.in_edge().get_soa_ptr();
+            //HornetBatchUpdatePtr update_inv_erase_ptr{update_inv.size(),
+            //  update_inv_soa_ptr.template get<0>(), update_inv_soa_ptr.template get<1>()};
 
-            HornetBatchUpdate update_inv_erase{update_inv_erase_ptr};
-            //device_graph_inv.erase(update_inv_erase);
-            device_graph.erase(update_inv_erase);
+            //HornetBatchUpdate update_inv_erase{update_inv_erase_ptr};
+            //device_graph.erase(update_inv_erase);
 
             if (valid) {
                 // CSV Data

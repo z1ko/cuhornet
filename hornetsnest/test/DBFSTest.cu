@@ -62,7 +62,7 @@ int exec(int argc, char** argv) {
 
     HornetGraph device_graph{graph_init};
     HornetGraph device_graph_inv{graph_init_inv};
-    DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv, 5000000};
+    DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv};
 
     vert_t source = device_graph.max_degree_id();
     DBFS.set_source(source);

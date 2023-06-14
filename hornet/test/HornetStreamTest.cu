@@ -52,32 +52,92 @@ int exec(int argc, char** argv) {
   auto initial_coo = hornet.getCOO();
   initial_coo.sort();
   
-  hornet::COO<DeviceType::HOST, vert_t, hornet::EMPTY, eoff_t> host_initial_coo = initial_coo;
-
-#if 0
-  std::cout << "Initial Graph:\n";
-  hornet.print();
+  std::multimap<vert_t, hornet::TypeList<vert_t>> initial_mmap = getHostMMap(initial_coo);
+  std::cout << "Initial graph saved to CPU\n";
+ 
+#if 1
+  vert_t current_key = -1;
+  for (auto it = initial_mmap.begin(); it != initial_mmap.end(); it++) {
+    
+    // Visit each key only once
+    if (current_key == it->first) continue;
+    else current_key = it->first;
+    
+    std::cout << current_key << " : ";
+    auto key_values = initial_mmap.equal_range(current_key);
+    for (auto val_it = key_values.first; val_it != key_values.second; val_it++)
+      std::cout << std::get<0>(val_it->second) << " ";
+    std::cout << "\n";
+  }
 #endif
 
   vert_t* src = new vert_t[batch_size];
   vert_t* dst = new vert_t[batch_size];
-  
+ 
+#define VERBOSE 0
+
   for(int i = 0; i < iterations; i++) {
     
     std::cout << "Generating batch of " << batch_size << " elements... ";
     generateBatch(loader, batch_size, src, dst, BatchGenType::INSERT);
     std::cout << "DONE\n";
 
+    // The update in inserted into the graph and preprocessed
     Update update_insert{UpdatePtr{batch_size, src, dst}};
-    Update update_erase{UpdatePtr{batch_size, src, dst}};
-    
-    std::cout << "Inserting... ";
-    hornet.insert(update_insert);
-    std::cout << "DONE\n";
+    update_insert.sort();
 
-    std::cout << "Erasing... ";
+#if VERBOSE == 1
+    std::cout << "Graph before update:\n";
+    hornet.print();
+#endif
+
+    hornet.insert(update_insert, true, true);
+
+    // Update was modified by the insert
+    bool incomplete_update = update_insert.size() != batch_size;
+    if (incomplete_update)
+      std::cout << "Update was not completely inserted\n";
+
+#if VERBOSE == 1
+    update_insert.print();
+    std::cout << "Graph after update:\n";
+    hornet.print();
+#endif
+
+    // Do work in the middle
+    auto after_insert_coo = hornet.getCOO();
+    if (after_insert_coo.size() != initial_coo.size() + update_insert.size())
+      std::cout << "Invalid mid size!\n";
+
+    // Generate erase batch that removes the effective previous batch update
+    auto soa_ptr = update_insert.in_edge().get_soa_ptr();
+    UpdatePtr update_erase_ptr{
+      update_insert.size(), soa_ptr.template get<0>(), soa_ptr.template get<1>()
+    };
+
+    // This should erase the insert update
+    Update update_erase{update_erase_ptr};
+    update_erase.sort();
+
+#if VERBOSE == 1
+    if (incomplete_update) {
+      std::cout << "===\n";
+      update_erase.print();
+    }
+#endif
+
     hornet.erase(update_erase);
-    std::cout << "DONE\n";
+
+#if VERBOSE == 1
+    std::cout << "Graph after erase:\n";
+    hornet.print();
+#endif
+
+    auto after_erase_coo = hornet.getCOO();
+    if (after_erase_coo.size() != initial_coo.size()) {
+      std::cout << "Invalid iteration size: " << after_erase_coo.size() << " != " << initial_coo.size() 
+                << std::endl;
+    }
   }
 
   delete[] src;
@@ -87,13 +147,7 @@ int exec(int argc, char** argv) {
   auto final_coo = hornet.getCOO();
   final_coo.sort();
 
-  hornet::COO<DeviceType::HOST, vert_t, hornet::EMPTY, eoff_t> host_final_coo = final_coo;
-
 #if 0
-  std::cout << "Final Graph:\n";
-  hornet.print();
-#endif
-
   // ======================================================================================
   // Check consistency of graph
 
@@ -108,7 +162,6 @@ int exec(int argc, char** argv) {
 
   if (host_final_coo.size() != host_initial_coo.size()) {
     std::cout << "\nInit Size "<< host_initial_coo.size() << " != Combined size " << host_final_coo.size() << "\n";
-    return -1;
   }
 
   bool valid = true;
@@ -125,6 +178,30 @@ int exec(int argc, char** argv) {
 
   std::cout << "Effective size: " << counter << std::endl;
   std::cout << (valid ? "PASSED" : "NOT PASSED") 
+            << std::endl;
+#endif
+
+  std::multimap<vert_t, hornet::TypeList<vert_t>> final_mmap = getHostMMap(final_coo);
+  std::cout << "Final graph saved to CPU\n";
+ 
+#if 1
+  current_key = -1;
+  for (auto it = final_mmap.begin(); it != final_mmap.end(); it++) {
+    
+    // Visit each key only once
+    if (current_key == it->first) continue;
+    else current_key = it->first;
+    
+    std::cout << current_key << " : ";
+    auto key_values = final_mmap.equal_range(current_key);
+    for (auto val_it = key_values.first; val_it != key_values.second; val_it++)
+      std::cout << std::get<0>(val_it->second) << " ";
+    std::cout << "\n";
+  }
+#endif
+
+  std::cout << "Valid: " 
+            << (final_mmap == initial_mmap ? "true" : "false")
             << std::endl;
 
   return 0;

@@ -34,7 +34,7 @@ public:
     };
 
 public:
-    DynamicBFS(HornetGraph& graph, HornetGraph& parent_graph, int max_update_size);
+    DynamicBFS(HornetGraph& graph, HornetGraph& parent_graph);
     virtual ~DynamicBFS();
 
     void reset()    override;
@@ -67,6 +67,11 @@ public:
     /// #brief Copy the current distances into the others
     void sync_distances();
 
+    void swap_and_sync_distances() {
+      swap_distances();
+      sync_distances();
+    }
+
 private:
     HornetGraph& _graph;
     HornetGraph& _parent_graph;
@@ -76,9 +81,8 @@ private:
     TwoLevelQueue<vert_t> _frontier;
     Stats _stats { };
 
-    // Used to filter only the usefull edges from the batch
-    int _max_update_size { 0 };
-    int *_valid_edges { nullptr };
+    // Used to measure algorithm performance
+    timer::Timer<timer::DEVICE> _device_timer;
 
     int _current_distance_vector { 0 };
     dist_t *_distances[2] = { nullptr, nullptr };
@@ -166,6 +170,25 @@ struct VertexUpdate {
     }
 };
 
+struct BatchVertexUpdate {
+
+  dist_t *read_distances, *write_distances;
+  TwoLevelQueue<vert_t> frontier;
+
+  OPERATOR(Vertex& src, Vertex& dst) {
+    
+    const int src_distance = read_distances[src.id()];
+    const int dst_distance = read_distances[dst.id()];
+
+    const int delta = dst_distance - src_distance;
+    if (delta > 1) {
+      if (atomicMin(&write_distances[dst.id()], src_distance + 1) == dst_distance)
+        frontier.insert(dst.id());
+    }
+  }
+
+};
+
 // Foreach node children overwrite old distance if we are closer
 struct DynamicExpandEdge {
 
@@ -207,14 +230,12 @@ struct DynamicExpandEdge {
 //------------------------------------------------------------------------------
 
 template<typename HornetGraph>
-DynamicBFS<HornetGraph>::DynamicBFS(HornetGraph& graph, HornetGraph& parent_graph, int max_update_size)
+DynamicBFS<HornetGraph>::DynamicBFS(HornetGraph& graph, HornetGraph& parent_graph)
 : StaticAlgorithm<HornetGraph>{graph}, _load_balancing{graph}, _frontier{graph, 10.0f}, 
-  _graph{graph}, _parent_graph{parent_graph}, _max_update_size{max_update_size}
+  _graph{graph}, _parent_graph{parent_graph}
 {
     _buffer_pool.allocate(&_distances[0], _graph.nV());
     _buffer_pool.allocate(&_distances[1], _graph.nV());
-
-    _buffer_pool.allocate(&_valid_edges, _max_update_size);
     reset();
 }
 
@@ -361,26 +382,115 @@ struct FilterEdges {
   }
 };
 
+#ifdef DBFS_FAST
+
+// Calculate delta of each edge
+__global__ void kernel_edges_delta(int *batch_src, int *batch_dst, int* delta, int* dist, int size) {
+  
+    const int stride = blockDim.x * gridDim.x;
+    const int beg = blockDim.x * blockIdx.x + threadIdx.x;
+
+    for(int i = beg; i < size; i += stride) {
+      delta[i] = dist[batch_dst[i]] - dist[batch_src[i]];
+    } 
+}
+
+// Apply delta to each destination vertex
+__global__ void kernel_apply_delta(int *vertices_ptr, int *delta_ptr, int *dist, int size) {
+    
+    const int stride = blockDim.x * gridDim.x;
+    const int beg = blockDim.x * blockIdx.x + threadIdx.x;
+
+    for(int i = beg; i < size; i += stride) {
+      int effective_delta = max(delta_ptr[i] - 1, 0);
+      dist[vertices_ptr[i]] -= effective_delta;
+    } 
+
+}
+
+#endif
+
 template<typename HornetGraph>
 void DynamicBFS<HornetGraph>::update(BatchUpdate& batch) {
+    const int BATCH_SIZE = batch.size();
 
-    const int batch_size = batch.size();
-    assert(batch_size <= _max_update_size);
+    _device_timer.start();
+    sync_distances();
 
-    forAllEdgesBatch(_graph, batch, FilterEdges { _valid_edges, current_distances() });
+    // Process batch by filtering edges with delta <= 1 
+    // the remaining destination nodes are added to the frontier
+#ifndef DBFS_FAST
+    forAllEdgesBatch(_graph, batch, 
+        BatchVertexUpdate { current_distances(), write_distances(), _frontier });
+#else
+    
+    auto batch_soa_ptr = update.in_edge().get_soa_ptr();
+    vert_t* batch_src = batch_soa_ptr.template get<0>();
+    vert_t* batch_dst = batch_soa_ptr.template get<1>();
 
-    auto batch_soa_ptr = batch.in_edge().get_soa_ptr();
-    update(batch_soa_ptr.template get<1>(), batch_size); 
+    // Calculate delta of each edge in the batch
+    thrust::device_vector<int> delta(BATCH_SIZE);
+    int* delta_ptr = thrust::raw_pointer_cast(&delta[0]); 
+    kernel_edges_delta<<<xlib::ceil_div<1024>(BATCH_SIZE), 1024>>>(
+        batch_src, batch_src, delta_ptr, _distances, batch.size())
+
+    // Sort the deltas based on their edge's destination
+    thrust::device_vector<vert_t> vertices(batch_dst, batch_dst + BATCH_SIZE);
+    thrust::sort_by_key(vertices.begin(), vertices.end(), delta.begin()); 
+
+    thrust::device_vector<vert_t> unique_vertices(BATCH_SIZE);
+    thrust::device_vector<int> unique_delta(BATCH_SIZE);
+
+    // Calculate maximum delta of all destination nodes
+    thrust::pair<vert_t*, int*> new_end;
+    new_end = thrust::reduce_by_key(thrust::device, 
+        vertices.begin(), 
+        vertices.end(), 
+        delta.begin(), 
+        unique_vertices.begin(), 
+        unique_delta.begin(), 
+        thrust::equal_to<vert_t>, 
+        thrust::maximum<int>);
+
+    // Apply delta to destination vertices
+    delta_ptr = thrust::raw_pointer_cast(&unique_delta[0]);
+    vert_t* vertices_ptr = thrust::raw_pointer_cast(&vertices[0]);
+    kernel_apply_delta<<<xlib::ceil_div<1024>(BATCH_SIZE), 1024>>>(
+        vertices_ptr, delta_ptr, _distances, new_end.first);
+
+#endif
+    
+    swap_and_sync_distances();
+    _frontier.swap();
+
+    _device_timer.stop();
+    _stats.vertex_update_time = _device_timer.duration();
+    _device_timer.start();
+
+    _stats.initial_frontier_size = _frontier.size();
+    while(_frontier.size() != 0) {
+        _stats.frontier_expansions_count += 1;
+
+        // Propagate changes to all children
+        forAllEdges(_graph, _frontier, 
+            DynamicExpandEdge { current_distances(), write_distances(), _frontier }, 
+            _load_balancing);
+
+        swap_and_sync_distances();
+        _frontier.swap();
+    }
+
+    _device_timer.stop();
+    _stats.expansion_time = _device_timer.duration();
 }
 
 #if 0
   #define CSV_DBFS_OUTPUT
 #endif
 
-  template<typename HornetGraph>
+template<typename HornetGraph>
 void DynamicBFS<HornetGraph>::update(const vert_t* dst_vertices, int count)
 {
-    // Sync the distance vectors
     sync_distances();
 
     // Used to benchmark all code parts
@@ -393,14 +503,13 @@ void DynamicBFS<HornetGraph>::update(const vert_t* dst_vertices, int count)
 
     section_timer.start();
 
-    // Find smallest parent
+    // Find smallest parents
     _frontier.insert(dst_vertices, count);
     forAllEdges(_parent_graph, _frontier, 
         VertexUpdate { current_distances(), write_distances(), _frontier }, 
         _load_balancing);
 
-    swap_distances();
-    sync_distances();
+    swap_and_sync_distances();
     _frontier.swap();
 
     section_timer.stop();
@@ -413,7 +522,7 @@ void DynamicBFS<HornetGraph>::update(const vert_t* dst_vertices, int count)
     // Propagate change to all nodes
     _stats.initial_frontier_size = _frontier.size();
     while (_frontier.size() > 0) {
-        cudaDeviceSynchronize(); 
+        //cudaDeviceSynchronize(); 
 
         const int frontier_size = _frontier.size();
         _stats.frontier_expansions_count += 1;
@@ -428,9 +537,7 @@ void DynamicBFS<HornetGraph>::update(const vert_t* dst_vertices, int count)
             DynamicExpandEdge { current_distances(), write_distances(), _frontier }, 
             _load_balancing);
 
-        swap_distances();
-        sync_distances();
-        
+        swap_and_sync_distances();
         _frontier.swap();
     }
     
@@ -444,24 +551,22 @@ template<typename HornetGraph>
 void DynamicBFS<HornetGraph>::release() {
     gpu::free(_distances[0], _graph.nV());
     gpu::free(_distances[1], _graph.nV());
-    gpu::free(_valid_edges, _max_update_size);
 }
 
 template<typename HornetGraph>
 bool DynamicBFS<HornetGraph>::validate() 
 {
     const auto nV = StaticAlgorithm<HornetGraph>::hornet.nV();
-    timer::Timer<timer::DEVICE> timer;
 
     // Launch static BFS on the current graph
     BfsTopDown2<HornetGraph> BFS(_graph);
     BFS.set_parameters(_source);
 
-    timer.start();
+    _device_timer.start();
     BFS.run();
-    timer.stop();
+    _device_timer.stop();
 
-    _stats.bfs_time = timer.duration();
+    _stats.bfs_time = _device_timer.duration();
     _stats.bfs_max_level = BFS.getLevels();
 
     // Copy normal BFS distance vector

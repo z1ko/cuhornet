@@ -97,7 +97,7 @@ namespace test {
             HornetGraph device_graph{graph_init};
             HornetGraph device_graph_inv{graph_init_inv};
 
-            DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv, 5000000};
+            DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv};
             DBFS.set_source(device_graph.max_degree_id());
             DBFS.run();
 
@@ -114,7 +114,7 @@ namespace test {
 
             // Apply dynamic BFS update
             timer.start();
-            DBFS.update(batch_dst, batch_size);
+            DBFS.update(update);
             timer.stop();
 
             timer.print("DBFS");

@@ -7,7 +7,10 @@ GRAPH_DIRECTORY="/home/z1ko/univr/tesi/cuhornet/benchmarks/graphs"
 OUTPUT_DIRECTORY="/home/z1ko/univr/tesi/cuhornet/benchmarks"
 
 # How many iterations for benchmark
-BENCHMARK_SIZE=100
+BENCHMARK_SIZE=500
+
+# What batch size will be tested
+BATCH_SIZES=(100 1000 5000 10000 50000 1000000)
 
 for file in "$GRAPH_DIRECTORY"/*; do
 	if ! [ -f "$file" ]; then
@@ -18,9 +21,7 @@ for file in "$GRAPH_DIRECTORY"/*; do
 	filename_ext=$(basename "$file")
 	filename="${filename_ext%.*}"
 
-	for i in {3..6}; do
-		# Bath size increments by powers of ten
-		batch_size=$((10 ** $i))
+	for batch_size in ${BATCH_SIZES[@]}; do
 
 		# Output pattern: benchmark_[type]_[graph]_[batch].csv
 		output="$OUTPUT_DIRECTORY/benchmark_insert_${filename}_${batch_size}.csv"
