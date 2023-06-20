@@ -109,7 +109,7 @@ endif()
 ###################################################################################################
 # - include paths ---------------------------------------------------------------------------------
 
-include_directories("${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}")
+#include_directories("${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}")
 include_directories(../primitives)
 include_directories(../xlib/include)
 
