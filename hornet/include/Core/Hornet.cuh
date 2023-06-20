@@ -138,7 +138,7 @@ public:
 
   void sort(void);
 
-  void permute(const int *permutation);
+  void relabel(int *relabeling, bool sort_edges);
 };
 
 #define HORNET                                                                 \

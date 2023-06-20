@@ -36,97 +36,102 @@
 #ifndef BLOCK_ARRAY_CUH
 #define BLOCK_ARRAY_CUH
 
+// clang-format off
 #include "BitTree/BitTree.cuh"
 #include "../../Conf/MemoryManagerConf.cuh" //EDGES_PER_BLOCKARRAY
 #include "../../SoA/SoAData.cuh"
 #include "../../Conf/HornetConf.cuh"
 #include <array>
 #include <unordered_map>
+// clang-format on
 
 namespace hornet {
 
-template <typename, DeviceType = DeviceType::DEVICE, typename = int> class BlockArray;
+template <typename, DeviceType = DeviceType::DEVICE, typename = int>
+class BlockArray;
 template <typename, DeviceType, typename> class BlockArrayManager;
 
-template<typename... Ts, DeviceType device_t, typename degree_t>
+template <typename... Ts, DeviceType device_t, typename degree_t>
 class BlockArray<TypeList<Ts...>, device_t, degree_t> {
 
-    template <typename, DeviceType, typename> friend class BlockArray;
+  template <typename, DeviceType, typename> friend class BlockArray;
 
-    CSoAData<TypeList<Ts...>, device_t> _edge_data;
-    BitTree<degree_t>                    _bit_tree;
+  CSoAData<TypeList<Ts...>, device_t> _edge_data;
+  BitTree<degree_t> _bit_tree;
 
-    public:
-    BlockArray(const int block_items, const int blockarray_items) noexcept;
+public:
+  BlockArray(const int block_items, const int blockarray_items) noexcept;
 
-    BlockArray(const BlockArray<TypeList<Ts...>, device_t, degree_t>& other) noexcept;
+  BlockArray(
+      const BlockArray<TypeList<Ts...>, device_t, degree_t> &other) noexcept;
 
-    BlockArray(BlockArray<TypeList<Ts...>, device_t, degree_t>&& other) noexcept;
+  BlockArray(BlockArray<TypeList<Ts...>, device_t, degree_t> &&other) noexcept;
 
-    ~BlockArray(void) noexcept = default;
+  ~BlockArray(void) noexcept = default;
 
-    xlib::byte_t * get_blockarray_ptr(void) noexcept;
+  xlib::byte_t *get_blockarray_ptr(void) noexcept;
 
-    int insert(void) noexcept;
+  int insert(void) noexcept;
 
-    void remove(int offset) noexcept;
+  void remove(int offset) noexcept;
 
-    int capacity(void) noexcept;
+  int capacity(void) noexcept;
 
-    size_t mem_size(void) noexcept;
+  size_t mem_size(void) noexcept;
 
-    bool full(void) noexcept;
+  bool full(void) noexcept;
 
-    CSoAData<TypeList<Ts...>, device_t>& get_soa_data(void) noexcept;
+  CSoAData<TypeList<Ts...>, device_t> &get_soa_data(void) noexcept;
 
-    void sort(void);
+  void sort(void);
+  void relabel(int *permutation, bool sort);
 };
 
-template <typename degree_t>
-struct EdgeAccessData {
-    xlib::byte_t * edge_block_ptr;
-    degree_t       vertex_offset;
-    degree_t       edges_per_block;
+template <typename degree_t> struct EdgeAccessData {
+  xlib::byte_t *edge_block_ptr;
+  degree_t vertex_offset;
+  degree_t edges_per_block;
 };
 
-template<typename... Ts, DeviceType device_t, typename degree_t>
+template <typename... Ts, DeviceType device_t, typename degree_t>
 class BlockArrayManager<TypeList<Ts...>, device_t, degree_t> {
 
-    template <typename, DeviceType, typename> friend class BlockArrayManager;
+  template <typename, DeviceType, typename> friend class BlockArrayManager;
 
-    static constexpr unsigned LOG_DEGREE = sizeof(degree_t)*8;
-    const degree_t _MaxEdgesPerBlockArray;
-    degree_t _largest_eb_size;
-    std::array<
-        std::unordered_map<
-            xlib::byte_t*,
-            BlockArray<TypeList<Ts...>, device_t, degree_t>>,
-    LOG_DEGREE> _ba_map;
+  static constexpr unsigned LOG_DEGREE = sizeof(degree_t) * 8;
+  const degree_t _MaxEdgesPerBlockArray;
+  degree_t _largest_eb_size;
+  std::array<std::unordered_map<xlib::byte_t *, BlockArray<TypeList<Ts...>,
+                                                           device_t, degree_t>>,
+             LOG_DEGREE>
+      _ba_map;
 
-    public:
-    BlockArrayManager(const degree_t MaxEdgesPerBlockArray = EDGES_PER_BLOCKARRAY) noexcept;
+public:
+  BlockArrayManager(
+      const degree_t MaxEdgesPerBlockArray = EDGES_PER_BLOCKARRAY) noexcept;
 
-    template <DeviceType d_t>
-    BlockArrayManager(const BlockArrayManager<TypeList<Ts...>, d_t, degree_t>& other) noexcept;
+  template <DeviceType d_t>
+  BlockArrayManager(
+      const BlockArrayManager<TypeList<Ts...>, d_t, degree_t> &other) noexcept;
 
-    template <DeviceType d_t>
-    BlockArrayManager(BlockArrayManager<TypeList<Ts...>, d_t, degree_t>&& other) noexcept;
+  template <DeviceType d_t>
+  BlockArrayManager(
+      BlockArrayManager<TypeList<Ts...>, d_t, degree_t> &&other) noexcept;
 
-    EdgeAccessData<degree_t> insert(const degree_t requested_degree) noexcept;
+  EdgeAccessData<degree_t> insert(const degree_t requested_degree) noexcept;
 
-    void remove(
-        degree_t       degree,
-        xlib::byte_t * edge_block_ptr,
-        degree_t       vertex_offset) noexcept;
+  void remove(degree_t degree, xlib::byte_t *edge_block_ptr,
+              degree_t vertex_offset) noexcept;
 
-    degree_t largest_edge_block_size(void) noexcept;
+  degree_t largest_edge_block_size(void) noexcept;
 
-    void removeAll(void) noexcept;
+  void removeAll(void) noexcept;
 
-    void sort(void);
+  void sort(void);
+  void relabel(int *relabeling, bool sort_edges);
 };
 
-}
+} // namespace hornet
 
 #include "BlockArray.i.cuh"
 #endif

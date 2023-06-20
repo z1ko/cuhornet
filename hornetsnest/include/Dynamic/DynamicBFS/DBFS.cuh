@@ -54,7 +54,7 @@ public:
 
   /// @brief Use the distance vector to calculate a permutation
   /// of the nodes that is cache friendly and apply it to the graph.
-  void apply_cache_reordering(bool apply_to_edges = false);
+  void apply_cache_reordering(bool sort_edges = false);
 
   /// @brief Return current distance vector
   dist_t *current_distances();
@@ -91,7 +91,7 @@ private:
 
   /// The last calculated permutation of the graph nodes to increase cache
   /// coherency
-  dist_t *_permutation{nullptr};
+  dist_t *_relabeling{nullptr};
 };
 
 } // namespace hornets_nest
@@ -242,7 +242,7 @@ DynamicBFS<HornetGraph>::DynamicBFS(HornetGraph &graph,
       _frontier{graph, 10.0f}, _graph{graph}, _parent_graph{parent_graph} {
   _buffer_pool.allocate(&_distances[0], _graph.nV());
   _buffer_pool.allocate(&_distances[1], _graph.nV());
-  _buffer_pool.allocate(&_permutation, _graph.nV());
+  _buffer_pool.allocate(&_relabeling, _graph.nV());
   reset();
 }
 
@@ -395,10 +395,9 @@ __global__ void kernel_accumulate_histogram(const dist_t *blocks,
 }
 
 /// @brief Distribute all nodes in their correct position inside the permutation
-__global__ void kernel_create_permutation(const dist_t *distances, const int N,
-                                          dist_t *regions,
-                                          const int regions_count,
-                                          dist_t *permutation) {
+__global__ void kernel_create_mapping(const dist_t *distances, const int N,
+                                      dist_t *regions, const int regions_count,
+                                      dist_t *mapping) {
 
   int grid_size = blockDim.x * gridDim.x;
   int global_idx = blockDim.x * blockIdx.x + threadIdx.x;
@@ -407,7 +406,7 @@ __global__ void kernel_create_permutation(const dist_t *distances, const int N,
     dist_t distance = distances[global_idx];
     if (distance < regions_count) {
       int position = atomicAdd(&regions[distance], 1);
-      permutation[position] = global_idx;
+      mapping[global_idx] = position;
     }
   }
 }
@@ -417,12 +416,12 @@ __global__ void kernel_create_permutation(const dist_t *distances, const int N,
 #define PERMUTATION_BLOCK_ITEMS                                                \
   (PERMUTATION_BLOCK_SIZE * PERMUTATION_BLOCK_WORK)
 
-/// Cool system... but a sort by key is faster... RIP
 #define PERMUTATION_USE_HISTOGRAM 1
 #define PERMUTATION_VERBOSE 0
 
 template <typename HornetGraph>
-void DynamicBFS<HornetGraph>::apply_cache_reordering(bool apply_to_edges) {
+void DynamicBFS<HornetGraph>::apply_cache_reordering(bool sort_edges) {
+  assert(!sort_edges && "Sorting is broken in hornet!");
 
   timer::Timer<timer::HOST> timer;
   timer.start();
@@ -500,25 +499,27 @@ void DynamicBFS<HornetGraph>::apply_cache_reordering(bool apply_to_edges) {
 
   cudaDeviceSynchronize();
   dist_t *d_histogram_ptr = thrust::raw_pointer_cast(&histogram[0]);
-  kernel_create_permutation<<<graph_blocks_count, PERMUTATION_BLOCK_SIZE>>>(
+  kernel_create_mapping<<<graph_blocks_count, PERMUTATION_BLOCK_SIZE>>>(
       current_distances(), _graph.nV(), d_histogram_ptr, histogram_size,
-      _permutation); // This is slow!
+      _relabeling); // This is slow!
 
 #else
 
+  assert(false && "This is not correct!");
+
   sync_distances();
-  thrust::sequence(thrust::device, _permutation, _permutation + _graph.nV());
+  thrust::sequence(thrust::device, _relabeling, _relabeling + _graph.nV());
   thrust::sort_by_key(thrust::device, write_distances(),
-                      write_distances() + _graph.nV(), _permutation);
+                      write_distances() + _graph.nV(), _relabeling);
   swap_distances();
 
 #endif
 
-  // Apply permutation to hornet
-  _graph.permute(_permutation);
+  // Apply relabeling to entire graph
+  _graph.relabel(_relabeling, sort_edges);
 
-  // Permute source node
-  cudaMemcpy(&_source, _permutation + _source, sizeof(dist_t),
+  // Relabel source node
+  cudaMemcpy(&_source, _relabeling + _source, sizeof(dist_t),
              cudaMemcpyDeviceToHost);
 
   cudaDeviceSynchronize();
@@ -696,7 +697,7 @@ void DynamicBFS<HornetGraph>::update(const vert_t *dst_vertices, int count) {
 template <typename HornetGraph> void DynamicBFS<HornetGraph>::release() {
   gpu::free(_distances[0], _graph.nV());
   gpu::free(_distances[1], _graph.nV());
-  gpu::free(_permutation, _graph.nV());
+  gpu::free(_relabeling, _graph.nV());
 }
 
 template <typename HornetGraph> bool DynamicBFS<HornetGraph>::validate() {

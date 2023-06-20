@@ -92,29 +92,47 @@ void HORNET::sort(void) {
   CHECK_CUDA_ERROR
 }
 
-#define PERMUTE_BLOCK_SIZE 1024
-#define PERMUTE_BLOCK_WORK 20
-#define PERMUTE_WORK (PERMUTE_BLOCK_SIZE * PERMUTE_BLOCK_WORK)
+#define RELABEL_VERBOSE 1
+#define RELABEL_BLOCK_SIZE 1024
+#define RELABEL_BLOCK_WORK 20
+#define RELABEL_WORK (RELABEL_BLOCK_SIZE * RELABEL_BLOCK_WORK)
 
 template <typename target_t>
-__global__ void kernel_apply_permutation(const int *permutation,
-                                         const target_t *target,
-                                         target_t *output, const int N) {
+__global__ void kernel_apply_relabeling(const int *relabeling,
+                                        const target_t *target,
+                                        target_t *output, const int N) {
 
   int grid_size = blockDim.x * gridDim.x;
   int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
   for (int i = global_idx; i < N; i += grid_size) {
-    output[permutation[global_idx]] = target[global_idx];
+    output[relabeling[i]] = target[i];
   }
 }
 
+/*
+template <unsigned N, unsigned SIZE, typename... VertexMetaTypes,
+          typename degree_t>
+static void permute_type_array(SoAPtr<degree_t, xlib::byte_t *, degree_t,
+                                      degree_t, VertexMetaTypes...> &old_soa,
+                               SoAPtr<degree_t, xlib::byte_t *, degree_t,
+                                      degree_t, VertexMetaTypes...> &new_soa,
+                               int *permutation, const int blocks_count) {
+
+  // Apply permutation to current type array
+  kernel_apply_permutation<<<blocks_count, PERMUTE_BLOCK_SIZE>>>(
+      permutation, old_soa.template get<N>(), new_soa.template get<N>());
+
+  if (N != SIZE)
+    permute_type_array<N + 1, SIZE, VertexMetaTypes...>(
+        old_soa, new_soa, permutation, blocks_count);
+}
+*/
+
 template <typename... VertexMetaTypes, typename... EdgeMetaTypes,
           typename vid_t, typename degree_t>
-void HORNET::permute(const int *permutation) {
-
-  constexpr std::size_t metadata_types_len = sizeof...(VertexMetaTypes);
-  assert(metadata_types_len == 4 &&
-         "Only permutation of simple SoA is supported");
+void HORNET::relabel(int *relabeling, bool sort_edges) {
+  assert(sizeof...(VertexMetaTypes) == 0 &&
+         "Relabeling does not support metatypes");
 
   // Where to store the new vertex data
   SoAData<TypeList<degree_t, xlib::byte_t *, degree_t, degree_t,
@@ -125,19 +143,52 @@ void HORNET::permute(const int *permutation) {
   auto new_soa = new_vertex_data.get_soa_ptr();
   auto old_soa = _vertex_data.get_soa_ptr();
 
-  int blocks_count = (nV() + PERMUTE_WORK - 1) / PERMUTE_WORK;
-  kernel_apply_permutation<degree_t><<<blocks_count, PERMUTE_BLOCK_SIZE>>>(
-      permutation, old_soa.template get<0>(), new_soa.template get<0>(), nV());
-  kernel_apply_permutation<xlib::byte_t *>
-      <<<blocks_count, PERMUTE_BLOCK_SIZE>>>(permutation,
-                                             old_soa.template get<1>(),
-                                             new_soa.template get<1>(), nV());
-  kernel_apply_permutation<degree_t><<<blocks_count, PERMUTE_BLOCK_SIZE>>>(
-      permutation, old_soa.template get<2>(), new_soa.template get<2>(), nV());
-  kernel_apply_permutation<degree_t><<<blocks_count, PERMUTE_BLOCK_SIZE>>>(
-      permutation, old_soa.template get<3>(), new_soa.template get<3>(), nV());
+  const int blocks_count = (nV() + RELABEL_WORK - 1) / RELABEL_WORK;
 
-  _vertex_data = std::move(new_vertex_data);
+  // Vertex degree
+  kernel_apply_relabeling<degree_t><<<blocks_count, RELABEL_BLOCK_SIZE>>>(
+      relabeling, old_soa.template get<0>(), new_soa.template get<0>(), nV());
+  // Pointer to vertex block array
+  kernel_apply_relabeling<xlib::byte_t *><<<blocks_count, RELABEL_BLOCK_SIZE>>>(
+      relabeling, old_soa.template get<1>(), new_soa.template get<1>(), nV());
+  // Block index in block array
+  kernel_apply_relabeling<degree_t><<<blocks_count, RELABEL_BLOCK_SIZE>>>(
+      relabeling, old_soa.template get<2>(), new_soa.template get<2>(), nV());
+  // Edges count
+  kernel_apply_relabeling<degree_t><<<blocks_count, RELABEL_BLOCK_SIZE>>>(
+      relabeling, old_soa.template get<3>(), new_soa.template get<3>(), nV());
+
+  /*
+  // Apply permutation to all meta types
+  permute_type_array<4, sizeof...(VertexMetaTypes) + 4, VertexMetaTypes...>(
+      old_soa, new_soa, permutation, blocks_count);
+  */
+
+#if RELABEL_VERBOSE
+  printf("\nRelabeling: \n");
+  for (int i = 0; i < nV(); i++) {
+    printf("%d|", i);
+  };
+  printf("\n");
+  thrust::device_ptr<int> p_ptr(relabeling);
+  thrust::copy(p_ptr, p_ptr + nV(), std::ostream_iterator<int>(std::cout, "|"));
+
+  printf("\nOld Vertex Degrees: \n");
+  thrust::device_ptr<degree_t> old_vertex_degrees(old_soa.template get<0>());
+  thrust::copy(old_vertex_degrees, old_vertex_degrees + nV(),
+               std::ostream_iterator<degree_t>(std::cout, "|"));
+
+  printf("\nNew Vertex Degrees: \n");
+  thrust::device_ptr<degree_t> new_vertex_degrees(new_soa.template get<0>());
+  thrust::copy(new_vertex_degrees, new_vertex_degrees + nV(),
+               std::ostream_iterator<degree_t>(std::cout, "|"));
+#endif
+
+  // New the vertex data is permuted
+  _vertex_data.template copy(new_vertex_data);
+
+  // We need to change all adj-lists to the new vertex ids
+  _ba_manager.relabel(relabeling, sort_edges);
 }
 
 } // namespace gpu

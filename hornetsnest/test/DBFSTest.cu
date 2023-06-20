@@ -65,11 +65,18 @@ int exec(int argc, char **argv) {
   DynamicBFS<HornetGraph> DBFS{device_graph, device_graph_inv};
 
   vert_t source = device_graph.max_degree_id();
-  DBFS.set_source(source);
+  DBFS.set_source(0 /*source*/);
   DBFS.run();
+
+  printf("Graph before reordering:\n");
+  device_graph.print();
 
   // Try permutation
   DBFS.apply_cache_reordering();
+
+  printf("Graph after reordering: \n");
+  device_graph.print();
+
   return 0;
 
   // =======================================================================
