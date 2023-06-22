@@ -421,7 +421,7 @@ __global__ void kernel_create_mapping(const dist_t *distances, const int N,
 
 template <typename HornetGraph>
 void DynamicBFS<HornetGraph>::apply_cache_reordering(bool sort_edges) {
-  assert(!sort_edges && "Sorting is broken in hornet!");
+  // assert(!sort_edges && "Sorting is broken in hornet!");
 
   timer::Timer<timer::HOST> timer;
   timer.start();

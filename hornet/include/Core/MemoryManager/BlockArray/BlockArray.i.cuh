@@ -38,10 +38,28 @@ namespace hornet {
 #define BLOCK_ARRAY BlockArray<TypeList<Ts...>, device_t, degree_t>
 #define B_A_MANAGER BlockArrayManager<TypeList<Ts...>, device_t, degree_t>
 
+#define BLOCK_ARRAY_SORT_FIX 1
+
 template <typename... Ts, DeviceType device_t, typename degree_t>
 BLOCK_ARRAY::BlockArray(const int block_items,
                         const int blockarray_items) noexcept
-    : _edge_data(blockarray_items), _bit_tree(block_items, blockarray_items) {}
+    : _edge_data(blockarray_items), _bit_tree(block_items, blockarray_items) {
+
+#if BLOCK_ARRAY_SORT_FIX
+  if (device_t == DeviceType::DEVICE) {
+
+    CSoAPtr<Ts...> soa = _edge_data.get_soa_ptr();
+    using T0 = typename xlib::SelectType<0, Ts...>::type;
+    thrust::device_ptr<T0> ptr =
+        thrust::device_pointer_cast(soa.template get<0>());
+
+    // Initialize memory of edge data to a sentinel value to fix
+    // sorting in ascending order
+    thrust::fill_n(thrust::device, ptr, blockarray_items,
+                   std::numeric_limits<T0>::max());
+  }
+#endif
+}
 
 template <typename... Ts, DeviceType device_t, typename degree_t>
 BLOCK_ARRAY::BlockArray(const BLOCK_ARRAY &other) noexcept
@@ -88,11 +106,81 @@ CSoAData<TypeList<Ts...>, device_t> &BLOCK_ARRAY::get_soa_data(void) noexcept {
   return _edge_data;
 }
 
+#define BLOCK_ARRAY_SORT_OLD 0
+#define BLOCK_ARRAY_SORT_VERBOSE 0
+#define BLOCK_ARRAY_SORT_SKIP_SIZE 128
+
 template <typename... Ts, DeviceType device_t, typename degree_t>
 void BLOCK_ARRAY::sort(void) {
+#if BLOCK_ARRAY_SORT_OLD
   _edge_data.segmented_sort(_bit_tree.get_log_block_items());
+#else
+
+  static_assert(sizeof...(Ts) == 1, "Can sort only edges without metatypes");
+  using T0 = typename xlib::SelectType<0, Ts...>::type;
+
+  int size = _edge_data.get_num_items();
+  int segment_size = 1 << _bit_tree.get_log_block_items();
+  int segments_count = size / segment_size;
+
+  // Skip sorting blocks with not too many nodes
+  if (segment_size < BLOCK_ARRAY_SORT_SKIP_SIZE)
+    return;
+
+#if BLOCK_ARRAY_SORT_VERBOSE
+  printf("Block Array Sort(segment_size: %d, size: %d, segments_count: "
+         "%d)\n",
+         segment_size, size, segments_count);
+#endif
+
+  // Create temporary copy of edges
+  CSoAData<TypeList<Ts...>, DeviceType::DEVICE> tmp_edge_data(size);
+  CSoAPtr<Ts...> tmp_soa = tmp_edge_data.get_soa_ptr();
+  CSoAPtr<Ts...> soa = _edge_data.get_soa_ptr();
+  tmp_edge_data.copy(soa, device_t, size);
+
+  T0 *keys_in = tmp_soa.template get<0>();
+  T0 *keys_out = soa.template get<0>();
+
+  // Calculate offset of all segments
+  cudaStream_t stream{nullptr};
+  rmm::device_vector<degree_t> segments(segments_count + 1);
+  thrust::transform(rmm::exec_policy(stream), thrust::make_counting_iterator(0),
+                    thrust::make_counting_iterator(segments_count + 1),
+                    thrust::make_constant_iterator(segment_size),
+                    segments.begin(), thrust::multiplies<degree_t>{});
+
+#if BLOCK_ARRAY_SORT_VERBOSE
+  printf("Block Array Relabel Sort SegmentsBeg[..10]:\n\t");
+  thrust::copy(segments.begin(), segments.begin() + 10,
+               std::ostream_iterator<int>(std::cout, ", "));
+  printf("\n");
+#endif
+
+  // TODO: Solve bug if nodes are sorted in ascending order,
+  // the zero-initialized values after the node's adjlist
+  // are sorted as well, resulting in a bunch of zeros at
+  // the beginning of the sorted adjlist.
+  // For now the problem has been "fixed" by initializing
+  // the edge_data SoA arrays with sentinel values bigger
+  // than any node id.
+
+  // Calculate required temporary buffer memory
+  size_t temp_buffer_size = 0;
+  cub::DeviceSegmentedRadixSort::SortKeys(
+      NULL, temp_buffer_size, keys_in, keys_out, size, segments.size() - 1,
+      segments.data().get(), segments.data().get() + 1);
+
+  // Sort nodes
+  rmm::device_buffer temp_buffer(temp_buffer_size, rmm::cuda_stream_view{});
+  cub::DeviceSegmentedRadixSort::SortKeys(
+      temp_buffer.data(), temp_buffer_size, keys_in, keys_out, size,
+      segments.size() - 1, segments.data().get(), segments.data().get() + 1);
+
+#endif
 }
 
+#define BLOCK_ARRAY_RELABEL_VERBOSE 1
 #define BLOCK_ARRAY_RELABEL_BLOCK_SIZE 1024
 #define BLOCK_ARRAY_RELABEL_BLOCK_WORK 20
 #define BLOCK_ARRAY_RELABEL_WORK                                               \
@@ -109,19 +197,48 @@ __global__ void kernel_relabel(const int *relabeling, int *vertices,
 }
 
 template <typename... Ts, DeviceType device_t, typename degree_t>
-void BLOCK_ARRAY::relabel(int *relabeling, bool sort_edges) {
+void BLOCK_ARRAY::relabel(int *relabeling) {
 
-  auto soa = _edge_data.get_soa_ptr();
-  int size = _edge_data.get_num_items();
+  CSoAPtr<Ts...> soa = _edge_data.get_soa_ptr();
+  const int size = _edge_data.get_num_items();
 
   const int block_count =
       (size + BLOCK_ARRAY_RELABEL_WORK - 1) / BLOCK_ARRAY_RELABEL_WORK;
   kernel_relabel<<<block_count, BLOCK_ARRAY_RELABEL_BLOCK_SIZE>>>(
       relabeling, soa.template get<0>(), size);
+}
 
-  // Simply sort by id, because the id rappresents the order of visit
-  if (sort_edges)
-    sort();
+#define BLOCK_ARRAY_FILL_BLOCK_SIZE 1024
+#define BLOCK_ARRAY_FILL_BLOCK_WORK 10
+#define BLOCK_ARRAY_FILL_WORK                                                  \
+  (BLOCK_ARRAY_FILL_BLOCK_SIZE * BLOCK_ARRAY_FILL_BLOCK_WORK)
+
+template <typename T>
+__global__ void kernel_fill(T *array, const int N, T value) {
+
+  int grid_size = blockDim.x * gridDim.x;
+  int global_idx = blockDim.x * blockIdx.x + threadIdx.x;
+  for (int i = global_idx; i < N; i += grid_size) {
+    array[i] = value;
+  }
+}
+
+template <typename... Ts, DeviceType device_t, typename degree_t>
+void BLOCK_ARRAY::fill_max() {
+  using T0 = typename xlib::SelectType<0, Ts...>::type;
+  CSoAPtr<Ts...> soa = _edge_data.get_soa_ptr();
+
+  printf("FILLING ARRAY(size: %d)...", 1 << _bit_tree.get_log_block_items());
+
+  const int size = _edge_data.get_num_items();
+  const int blocks_count =
+      (size + BLOCK_ARRAY_FILL_WORK - 1) / BLOCK_ARRAY_FILL_WORK;
+
+  T0 *vids = soa.template get<0>();
+  kernel_fill<T0><<<blocks_count, BLOCK_ARRAY_FILL_BLOCK_SIZE>>>(
+      vids, size, std::numeric_limits<T0>::max());
+
+  printf("DONE\n");
 }
 
 //==============================================================================
@@ -179,6 +296,10 @@ B_A_MANAGER::insert(const degree_t requested_degree) noexcept {
   auto block_ptr = new_block_array.get_blockarray_ptr();
   _ba_map[bin_index].insert(
       std::make_pair(block_ptr, std::move(new_block_array)));
+
+  // Fill with max val to solve sorting bug
+  // new_block_array.fill_max();
+
   return ea;
 }
 
@@ -212,10 +333,10 @@ void B_A_MANAGER::sort(void) {
 }
 
 template <typename... Ts, DeviceType device_t, typename degree_t>
-void B_A_MANAGER::relabel(int *permutation, bool sort) {
+void B_A_MANAGER::relabel(int *permutation) {
   for (unsigned i = 0; i < _ba_map.size(); ++i) {
     for (auto &b : _ba_map[i]) {
-      b.second.relabel(permutation, sort);
+      b.second.relabel(permutation);
     }
   }
 }

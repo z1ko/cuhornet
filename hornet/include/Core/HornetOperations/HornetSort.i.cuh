@@ -92,7 +92,7 @@ void HORNET::sort(void) {
   CHECK_CUDA_ERROR
 }
 
-#define RELABEL_VERBOSE 1
+#define RELABEL_VERBOSE 0
 #define RELABEL_BLOCK_SIZE 1024
 #define RELABEL_BLOCK_WORK 20
 #define RELABEL_WORK (RELABEL_BLOCK_SIZE * RELABEL_BLOCK_WORK)
@@ -110,21 +110,14 @@ __global__ void kernel_apply_relabeling(const int *relabeling,
 }
 
 /*
-template <unsigned N, unsigned SIZE, typename... VertexMetaTypes,
-          typename degree_t>
-static void permute_type_array(SoAPtr<degree_t, xlib::byte_t *, degree_t,
-                                      degree_t, VertexMetaTypes...> &old_soa,
-                               SoAPtr<degree_t, xlib::byte_t *, degree_t,
-                                      degree_t, VertexMetaTypes...> &new_soa,
-                               int *permutation, const int blocks_count) {
-
-  // Apply permutation to current type array
-  kernel_apply_permutation<<<blocks_count, PERMUTE_BLOCK_SIZE>>>(
-      permutation, old_soa.template get<N>(), new_soa.template get<N>());
-
-  if (N != SIZE)
-    permute_type_array<N + 1, SIZE, VertexMetaTypes...>(
-        old_soa, new_soa, permutation, blocks_count);
+template <unsigned N, unsigned SIZE, typename... VertexMetaTypes>
+void permute_type_array(SoAPtr<degree_t, xlib::byte_t *, degree_t, degree_t,
+                               VertexMetaTypes...> &old_soa,
+                        const int blocks_count) {
+  if constexpr (N != SIZE) {
+    kernel_apply_relabeling<<<blocks_count, RELABEL_BLOCK_SIZE>>>();
+    permute_type_array<N + 1, SIZE, VertexMetaTypes...>(old_soa, blocks_count);
+  }
 }
 */
 
@@ -182,13 +175,18 @@ void HORNET::relabel(int *relabeling, bool sort_edges) {
   thrust::device_ptr<degree_t> new_vertex_degrees(new_soa.template get<0>());
   thrust::copy(new_vertex_degrees, new_vertex_degrees + nV(),
                std::ostream_iterator<degree_t>(std::cout, "|"));
+  printf("\n");
 #endif
 
   // New the vertex data is permuted
   _vertex_data.template copy(new_vertex_data);
 
   // We need to change all adj-lists to the new vertex ids
-  _ba_manager.relabel(relabeling, sort_edges);
+  _ba_manager.relabel(relabeling);
+
+  // Sort all blocks in id-order
+  if (sort_edges)
+    _ba_manager.sort();
 }
 
 } // namespace gpu

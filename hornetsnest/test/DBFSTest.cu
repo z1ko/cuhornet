@@ -72,7 +72,7 @@ int exec(int argc, char **argv) {
   device_graph.print();
 
   // Try permutation
-  DBFS.apply_cache_reordering();
+  DBFS.apply_cache_reordering(true);
 
   printf("Graph after reordering: \n");
   device_graph.print();

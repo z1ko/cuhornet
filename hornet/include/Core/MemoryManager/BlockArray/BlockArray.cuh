@@ -84,7 +84,8 @@ public:
   CSoAData<TypeList<Ts...>, device_t> &get_soa_data(void) noexcept;
 
   void sort(void);
-  void relabel(int *permutation, bool sort);
+  void relabel(int *permutation);
+  void fill_max();
 };
 
 template <typename degree_t> struct EdgeAccessData {
@@ -128,7 +129,7 @@ public:
   void removeAll(void) noexcept;
 
   void sort(void);
-  void relabel(int *relabeling, bool sort_edges);
+  void relabel(int *relabeling);
 };
 
 } // namespace hornet
