@@ -5,6 +5,7 @@
 #include <Device/Util/Timer.cuh>
 #include <LoadBalancing/LogarithmRadixBinning.cuh>
 #include <Static/BreadthFirstSearch/TopDown2.cuh>
+#include <cuda_device_runtime_api.h>
 #include <iterator>
 #include <stdio.h>
 
@@ -291,14 +292,14 @@ template <typename HornetGraph> void DynamicBFS<HornetGraph>::swap_distances() {
 }
 
 // Copy the content of the 'from' vector to the 'to' vector
-__global__ void sync_distances_kernel(const dist_t *from, dist_t *to,
+__global__ void sync_distances_kernel(const dist_t *src, dist_t *dst,
                                       int size) {
 
   int stride = blockDim.x * gridDim.x;
   int start = blockIdx.x * blockDim.x + threadIdx.x;
 
   for (auto i = start; i < size; i += stride) {
-    to[i] = from[i];
+    dst[i] = src[i];
   }
 }
 
@@ -403,38 +404,63 @@ __global__ void kernel_create_mapping(const dist_t *distances, const int N,
   int global_idx = blockDim.x * blockIdx.x + threadIdx.x;
 
   for (int i = global_idx; i < N; i += grid_size) {
-    dist_t distance = distances[global_idx];
-    if (distance < regions_count) {
-      int position = atomicAdd(&regions[distance], 1);
-      mapping[global_idx] = position;
-    }
+
+    // Maps nodes without distance to the last region,
+    // which is used only by them
+    dist_t distance = distances[i];
+    if (distance > regions_count)
+      printf("AAAAAAAAAAAAAAAAA: %d\n", distance);
+
+    int position = atomicAdd(&regions[distance], 1);
+    mapping[i] = position;
+  }
+}
+
+__global__ void kernel_permute_distances(const dist_t *read_distances,
+                                         dist_t *write_distances,
+                                         const dist_t *mapping, const int N) {
+
+  int grid_size = blockDim.x * gridDim.x;
+  int global_idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+  for (int i = global_idx; i < N; i += grid_size) {
+    int mapped_i = mapping[i];
+    write_distances[mapped_i] = read_distances[i];
+  }
+}
+
+__global__ void kernel_make_permutation_map(const vert_t *permutation,
+                                            vert_t *map, const int N) {
+
+  int grid_size = blockDim.x * gridDim.x;
+  int global_idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+  for (int i = global_idx; i < N; i += grid_size) {
+    vert_t node_id = permutation[i];
+    map[node_id] = i;
   }
 }
 
 #define PERMUTATION_BLOCK_SIZE 1024
 #define PERMUTATION_BLOCK_WORK 20
-#define PERMUTATION_BLOCK_ITEMS                                                \
-  (PERMUTATION_BLOCK_SIZE * PERMUTATION_BLOCK_WORK)
+#define PERMUTATION_WORK (PERMUTATION_BLOCK_SIZE * PERMUTATION_BLOCK_WORK)
 
-#define PERMUTATION_USE_HISTOGRAM 1
+// Cool system... but a sort by key is faster... RIP
+#define PERMUTATION_USE_HISTOGRAM 0
+#define PERMUTATION_VALIDATE 1
 #define PERMUTATION_VERBOSE 0
 
 template <typename HornetGraph>
 void DynamicBFS<HornetGraph>::apply_cache_reordering(bool sort_edges) {
-  // assert(!sort_edges && "Sorting is broken in hornet!");
-
-  timer::Timer<timer::HOST> timer;
-  timer.start();
-
 #if PERMUTATION_USE_HISTOGRAM
-
+  /*
   const int graph_blocks_count =
       (_graph.nV() + PERMUTATION_BLOCK_ITEMS - 1) / PERMUTATION_BLOCK_ITEMS;
   const int acc_blocks_count =
       (PARTIAL_HIST_SIZE + PERMUTATION_BLOCK_ITEMS - 1) /
       PERMUTATION_BLOCK_ITEMS;
 
-  const int histogram_size = _current_level - 1;
+  const int histogram_size = _current_level;
   thrust::device_vector<dist_t> histogram(histogram_size);
   thrust::device_vector<dist_t> partial_histograms(PARTIAL_HIST_SIZE *
                                                    graph_blocks_count);
@@ -503,15 +529,62 @@ void DynamicBFS<HornetGraph>::apply_cache_reordering(bool sort_edges) {
       current_distances(), _graph.nV(), d_histogram_ptr, histogram_size,
       _relabeling); // This is slow!
 
+  // Apply permutation to dynamic distance vector
+  kernel_permute_distances<<<graph_blocks_count, PERMUTATION_BLOCK_SIZE>>>(
+      current_distances(), write_distances(), _relabeling, _graph.nV());
+  swap_distances();
+
+  */
 #else
 
-  assert(false && "This is not correct!");
+  const int nV = _graph.nV();
 
-  sync_distances();
-  thrust::sequence(thrust::device, _relabeling, _relabeling + _graph.nV());
-  thrust::sort_by_key(thrust::device, write_distances(),
-                      write_distances() + _graph.nV(), _relabeling);
+  thrust::device_vector<vert_t> sequence(nV);
+  thrust::sequence(thrust::device, sequence.begin(), sequence.end(), 0);
+  vert_t *sequence_ptr = thrust::raw_pointer_cast(&sequence[0]);
+
+  thrust::device_vector<vert_t> permutation(nV);
+  vert_t *permutation_ptr = thrust::raw_pointer_cast(&permutation[0]);
+
+  size_t temp_buffer_size;
+  cub::DeviceRadixSort::SortPairs(NULL, temp_buffer_size, current_distances(),
+                                  write_distances(), sequence_ptr,
+                                  permutation_ptr, nV);
+
+  // Calculate where each node should go based on their distance
+  // and update dynamic distance vector to the new ordering
+  rmm::device_buffer temp_buffer{temp_buffer_size, rmm::cuda_stream_view{}};
+  cub::DeviceRadixSort::SortPairs(temp_buffer.data(), temp_buffer_size,
+                                  current_distances(), write_distances(),
+                                  sequence_ptr, permutation_ptr, nV);
   swap_distances();
+
+  // Calculate mapping of nodes given the permutation
+  const int graph_blocks_count =
+      (_graph.nV() + PERMUTATION_WORK - 1) / PERMUTATION_WORK;
+  kernel_make_permutation_map<<<graph_blocks_count, PERMUTATION_BLOCK_SIZE>>>(
+      permutation_ptr, _relabeling, nV);
+
+#if PERMUTATION_VERBOSE
+  thrust::host_vector<vert_t> h_perm = permutation;
+  printf("Permutation:\n");
+  for (int i = 0; i < nV; i++)
+    printf("%2d ", h_perm[i]);
+
+  printf("\nMapping:\n");
+  for (int i = 0; i < nV; i++)
+    printf("%2d ", i);
+  printf("\n");
+
+  thrust::host_vector<dist_t> relabeling(nV);
+  thrust::device_ptr<dist_t> relabeling_ptr =
+      thrust::device_pointer_cast(_relabeling);
+  thrust::copy(relabeling_ptr, relabeling_ptr + nV, relabeling.begin());
+
+  for (int i = 0; i < nV; i++)
+    printf("%2d ", relabeling[i]);
+  printf("\n");
+#endif
 
 #endif
 
@@ -522,35 +595,79 @@ void DynamicBFS<HornetGraph>::apply_cache_reordering(bool sort_edges) {
   cudaMemcpy(&_source, _relabeling + _source, sizeof(dist_t),
              cudaMemcpyDeviceToHost);
 
-  cudaDeviceSynchronize();
-  timer.stop();
-  printf("Permutation time: %f\n", timer.duration());
+#if PERMUTATION_VALIDATE
+  int limit = 0;
+  thrust::host_vector<dist_t> distances(_graph.nV());
+  thrust::device_ptr<dist_t> ptr =
+      thrust::device_pointer_cast(current_distances());
+  thrust::copy(ptr, ptr + distances.size(), distances.begin());
+
+#if PERMUTATION_VERBOSE
+  printf("Distances:\n");
+#endif
+  for (int i = 0; i < _graph.nV(); i++) {
+#if PERMUTATION_VERBOSE
+    printf("%2d ", distances[i]);
+#endif
+    if (distances[i] > limit)
+      limit = distances[i];
+    else if (distances[i] < limit) {
+      printf("PERMUTATION NOT CORRECT! limit: %d\n", limit);
+      break;
+    }
+  }
+#if PERMUTATION_VERBOSE
+  printf("\n");
+#endif
+#endif
 }
 
-#ifdef DBFS_FAST
+#define DBFS_VERTEX_UPDATE_NO_ATOMIC 0
+#if DBFS_VERTEX_UPDATE_NO_ATOMIC
 
-// Calculate delta of each edge
-__global__ void kernel_edges_delta(int *batch_src, int *batch_dst, int *delta,
-                                   int *dist, int size) {
+// Calculate assigned new level to each destination
+__global__ void kernel_edges_distances(vert_t *batch_src, dist_t *levels,
+                                       dist_t *dist, int size) {
 
   const int stride = blockDim.x * gridDim.x;
   const int beg = blockDim.x * blockIdx.x + threadIdx.x;
 
   for (int i = beg; i < size; i += stride) {
-    delta[i] = dist[batch_dst[i]] - dist[batch_src[i]];
+    dist_t distance = dist[batch_src[i]];
+    if (distance != INF)
+      distance += 1;
+
+    levels[i] = distance;
+
+    /*
+    printf("Edge distance[%3d] | src: %4d, assign_distance: %4d\n", i,
+           batch_src[i], levels[i]);
+    */
   }
 }
 
 // Apply delta to each destination vertex
-__global__ void kernel_apply_delta(int *vertices_ptr, int *delta_ptr, int *dist,
-                                   int size) {
+__global__ void kernel_apply_distances(vert_t *unique_destinations,
+                                       dist_t *unique_distances,
+                                       dist_t *distances,
+                                       TwoLevelQueue<vert_t> frontier,
+                                       int size) {
 
   const int stride = blockDim.x * gridDim.x;
   const int beg = blockDim.x * blockIdx.x + threadIdx.x;
 
   for (int i = beg; i < size; i += stride) {
-    int effective_delta = max(delta_ptr[i] - 1, 0);
-    dist[vertices_ptr[i]] -= effective_delta;
+    vert_t dest_id = unique_destinations[i];
+
+    /*
+    printf("dest_id: %d, distance: %d, unique_distance: %d\n", dest_id,
+           distances[dest_id], unique_distances[i]);
+    */
+
+    if (distances[dest_id] > unique_distances[i]) {
+      distances[dest_id] = unique_distances[i];
+      frontier.insert(dest_id);
+    }
   }
 }
 
@@ -559,49 +676,53 @@ __global__ void kernel_apply_delta(int *vertices_ptr, int *delta_ptr, int *dist,
 template <typename HornetGraph>
 void DynamicBFS<HornetGraph>::update(BatchUpdate &batch) {
   const int BATCH_SIZE = batch.size();
-
   _device_timer.start();
-  sync_distances();
 
-  // Process batch by filtering edges with delta <= 1
-  // the remaining destination nodes are added to the frontier
-#ifndef DBFS_FAST
+#if DBFS_VERTEX_UPDATE_NO_ATOMIC
+  auto soa = batch.in_edge().get_soa_ptr();
+  vert_t *batch_src = soa.template get<0>();
+  vert_t *batch_dst = soa.template get<1>();
+
+  // Calculate new level of each edge destination in the batch
+  thrust::device_vector<dist_t> distances(BATCH_SIZE);
+  dist_t *distances_ptr = thrust::raw_pointer_cast(&distances[0]);
+  kernel_edges_distances<<<xlib::ceil_div<1024>(BATCH_SIZE), 1024>>>(
+      batch_src, distances_ptr, current_distances(), BATCH_SIZE);
+
+  // Sort the distances based on their edge's destination, to compact them
+  thrust::device_ptr<vert_t> dst_ptr = thrust::device_pointer_cast(batch_dst);
+  thrust::device_vector<vert_t> destinations(dst_ptr, dst_ptr + BATCH_SIZE);
+  thrust::sort_by_key(destinations.begin(), destinations.end(),
+                      distances.begin());
+
+  thrust::device_vector<vert_t> unique_destinations(BATCH_SIZE);
+  thrust::device_vector<dist_t> unique_distances(BATCH_SIZE);
+
+  // Calculate minimum new distance of all destination nodes
+  auto new_end = thrust::reduce_by_key(
+      thrust::device, destinations.begin(), destinations.end(),
+      distances.begin(), unique_destinations.begin(), unique_distances.begin(),
+      thrust::equal_to<vert_t>{}, thrust::minimum<int>{});
+
+  vert_t *unique_destinations_ptr =
+      thrust::raw_pointer_cast(&unique_destinations[0]);
+  dist_t *unique_distances_ptr = thrust::raw_pointer_cast(&unique_distances[0]);
+
+  const int effective_size = new_end.first - unique_destinations.begin();
+  printf("Applying new distances for %d/%d of the batch edges\n",
+         effective_size, BATCH_SIZE);
+
+  // Apply new distances to nodes if possible
+  sync_distances();
+  kernel_apply_distances<<<xlib::ceil_div<1024>(effective_size), 1024>>>(
+      unique_destinations_ptr, unique_distances_ptr, write_distances(),
+      _frontier, effective_size);
+#else
+  // This is much faster than the other method
+  sync_distances();
   forAllEdgesBatch(
       _graph, batch,
       BatchVertexUpdate{current_distances(), write_distances(), _frontier});
-#else
-
-  auto batch_soa_ptr = update.in_edge().get_soa_ptr();
-  vert_t *batch_src = batch_soa_ptr.template get<0>();
-  vert_t *batch_dst = batch_soa_ptr.template get<1>();
-
-  // Calculate delta of each edge in the batch
-  thrust::device_vector<int> delta(BATCH_SIZE);
-  int *delta_ptr = thrust::raw_pointer_cast(&delta[0]);
-  kernel_edges_delta<<<xlib::ceil_div<1024>(BATCH_SIZE), 1024>>>(
-      batch_src, batch_src, delta_ptr, _distances, batch.size())
-
-      // Sort the deltas based on their edge's destination
-      thrust::device_vector<vert_t>
-          vertices(batch_dst, batch_dst + BATCH_SIZE);
-  thrust::sort_by_key(vertices.begin(), vertices.end(), delta.begin());
-
-  thrust::device_vector<vert_t> unique_vertices(BATCH_SIZE);
-  thrust::device_vector<int> unique_delta(BATCH_SIZE);
-
-  // Calculate maximum delta of all destination nodes
-  thrust::pair<vert_t *, int *> new_end;
-  new_end = thrust::reduce_by_key(
-      thrust::device, vertices.begin(), vertices.end(), delta.begin(),
-      unique_vertices.begin(), unique_delta.begin(), thrust::equal_to<vert_t>,
-      thrust::maximum<int>);
-
-  // Apply delta to destination vertices
-  delta_ptr = thrust::raw_pointer_cast(&unique_delta[0]);
-  vert_t *vertices_ptr = thrust::raw_pointer_cast(&vertices[0]);
-  kernel_apply_delta<<<xlib::ceil_div<1024>(BATCH_SIZE), 1024>>>(
-      vertices_ptr, delta_ptr, _distances, new_end.first);
-
 #endif
 
   swap_and_sync_distances();
@@ -714,13 +835,25 @@ template <typename HornetGraph> bool DynamicBFS<HornetGraph>::validate() {
   _stats.bfs_time = _device_timer.duration();
   _stats.bfs_max_level = BFS.getLevels();
 
+  thrust::device_ptr<dist_t> bfs_dist =
+      thrust::device_pointer_cast(BFS.get_distance_vector());
+
+  thrust::device_ptr<dist_t> dbfs_dist =
+      thrust::device_pointer_cast(current_distances());
+
+  bool equal =
+      thrust::equal(thrust::device, bfs_dist, bfs_dist + nV, dbfs_dist);
+  return equal;
+
+#if 0
+
   // Copy normal BFS distance vector
   auto *nbfs_host_distances = new dist_t[nV];
   gpu::copyToHost(BFS.get_distance_vector(), nV, nbfs_host_distances);
 
 #if 0
-    for (int i = 0; i < nV; i++)
-        printf("[NBFS] node: %d | dist: %d\n", i, nbfs_host_distances[i]);
+  for (int i = 0; i < nV; i++)
+    printf("[NBFS] node: %d | dist: %d\n", i, nbfs_host_distances[i]);
 #endif
 
   // Copy dynamic BFS distance vector
@@ -728,32 +861,32 @@ template <typename HornetGraph> bool DynamicBFS<HornetGraph>::validate() {
   gpu::copyToHost(current_distances(), nV, dbfs_host_distances);
 
 #if 0
-    for (int i = 0; i < nV; i++)
-        printf("[DBFS] node: %d | dist: %d\n", i, dbfs_host_distances[i]);
+  for (int i = 0; i < nV; i++)
+    printf("[DBFS] node: %d | dist: %d\n", i, dbfs_host_distances[i]);
 #endif
 
   // They must be the same
   int error_count = 0;
   for (int i = 0; i < nV; i++) {
 
-    // If the nbfs distance is INF then the node is not in reachable from source
     if (nbfs_host_distances[i] != dbfs_host_distances[i]) {
       error_count += 1;
       printf("[%6d] vertex %6d | nbfs: %6d, dbfs: %6d\n", error_count, i,
              nbfs_host_distances[i], dbfs_host_distances[i]);
-#if 0
-            if (error_count >= 10) {
-                printf("... and other errors\n");
-                break;
-            }
+#if 1
+      if (error_count >= 10) {
+        printf("... and other errors\n");
+        break;
+      }
 #endif
-    }
   }
+}
 
   delete[] nbfs_host_distances;
   delete[] dbfs_host_distances;
 
   return error_count == 0;
+#endif
 };
 
 } // namespace hornets_nest

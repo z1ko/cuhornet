@@ -45,18 +45,23 @@ BLOCK_ARRAY::BlockArray(const int block_items,
                         const int blockarray_items) noexcept
     : _edge_data(blockarray_items), _bit_tree(block_items, blockarray_items) {
 
+  CSoAPtr<Ts...> soa = _edge_data.get_soa_ptr();
+  using T0 = typename xlib::SelectType<0, Ts...>::type;
+  constexpr T0 limit = std::numeric_limits<T0>::max();
+
 #if BLOCK_ARRAY_SORT_FIX
   if (device_t == DeviceType::DEVICE) {
 
-    CSoAPtr<Ts...> soa = _edge_data.get_soa_ptr();
-    using T0 = typename xlib::SelectType<0, Ts...>::type;
     thrust::device_ptr<T0> ptr =
         thrust::device_pointer_cast(soa.template get<0>());
+    thrust::fill_n(thrust::device, ptr, blockarray_items, limit);
 
-    // Initialize memory of edge data to a sentinel value to fix
-    // sorting in ascending order
-    thrust::fill_n(thrust::device, ptr, blockarray_items,
-                   std::numeric_limits<T0>::max());
+    // cudaMemset(soa.template get<0>(), sizeof(T0) * blockarray_items, 0xFF);
+  } else {
+
+    T0 *ptr = soa.template get<0>();
+    std::fill_n(ptr, blockarray_items, limit);
+    // memset(soa.template get<0>(), sizeof(T0) * blockarray_items, 0xFF);
   }
 #endif
 }
@@ -108,7 +113,7 @@ CSoAData<TypeList<Ts...>, device_t> &BLOCK_ARRAY::get_soa_data(void) noexcept {
 
 #define BLOCK_ARRAY_SORT_OLD 0
 #define BLOCK_ARRAY_SORT_VERBOSE 0
-#define BLOCK_ARRAY_SORT_SKIP_SIZE 128
+#define BLOCK_ARRAY_SORT_SKIP_SIZE 32
 
 template <typename... Ts, DeviceType device_t, typename degree_t>
 void BLOCK_ARRAY::sort(void) {
@@ -186,25 +191,32 @@ void BLOCK_ARRAY::sort(void) {
 #define BLOCK_ARRAY_RELABEL_WORK                                               \
   (BLOCK_ARRAY_RELABEL_BLOCK_SIZE * BLOCK_ARRAY_RELABEL_BLOCK_WORK)
 
-__global__ void kernel_relabel(const int *relabeling, int *vertices,
-                               const int N) {
+template <typename T, T invalid_id>
+static __global__ void kernel_relabel(const T *relabeling, T *vertices,
+                                      const int N) {
 
   int grid_size = blockDim.x * gridDim.x;
   int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
   for (int i = global_idx; i < N; i += grid_size) {
-    vertices[i] = relabeling[vertices[i]];
+    // printf("Relabeling at index %d: %d -> %d\n", i, vertices[i],
+    //        relabeling[vertices[i]]);
+    if (vertices[i] != invalid_id) {
+      vertices[i] = relabeling[vertices[i]];
+    }
   }
 }
 
 template <typename... Ts, DeviceType device_t, typename degree_t>
 void BLOCK_ARRAY::relabel(int *relabeling) {
+  using T0 = typename xlib::SelectType<0, Ts...>::type;
+  constexpr T0 limit = std::numeric_limits<T0>::max();
 
   CSoAPtr<Ts...> soa = _edge_data.get_soa_ptr();
   const int size = _edge_data.get_num_items();
 
   const int block_count =
       (size + BLOCK_ARRAY_RELABEL_WORK - 1) / BLOCK_ARRAY_RELABEL_WORK;
-  kernel_relabel<<<block_count, BLOCK_ARRAY_RELABEL_BLOCK_SIZE>>>(
+  kernel_relabel<T0, limit><<<block_count, BLOCK_ARRAY_RELABEL_BLOCK_SIZE>>>(
       relabeling, soa.template get<0>(), size);
 }
 
