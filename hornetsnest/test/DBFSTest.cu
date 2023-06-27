@@ -12,6 +12,7 @@
 #include <Util/CommandLineParam.hpp>
 
 #include "Dynamic/DynamicBFS/DBFS.cuh"
+#include "Static/ClusteringCoefficient/cc.cuh"
 
 namespace test {
 
@@ -68,16 +69,16 @@ int exec(int argc, char **argv) {
   DBFS.set_source(0 /*source*/);
   DBFS.run();
 
-  printf("Graph before reordering:\n");
-  device_graph.print();
+  ClusteringCoefficient clustering{device_graph};
+  clustering.init();
+  clustering.run();
 
-  // Try permutation
-  DBFS.apply_cache_reordering(true);
+  auto gcc = clustering.getGlobalClusteringCoeff();
+  auto tcn = clustering.countTriangles();
+  if (host_graph.is_undirected())
+    tcn /= 2;
 
-  printf("Graph after reordering: \n");
-  device_graph.print();
-
-  return 0;
+  printf("global_clustering_coeff: %f, triangles: %llu\n", gcc, tcn);
 
   // =======================================================================
   // Create and apply new batch undirected

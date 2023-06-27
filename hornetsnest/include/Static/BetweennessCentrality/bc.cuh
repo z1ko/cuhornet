@@ -1,10 +1,10 @@
 /**
  * @brief
  * @author Oded Green                                                       <br>
- *   NVIDIA Corporation                                                     <br>       
+ *   NVIDIA Corporation                                                     <br>
  *   ogreen@nvidia.com
  *   @author Muhammad Osama Sakhi                                           <br>
- *   Georgia Institute of Technology                                        <br>       
+ *   Georgia Institute of Technology                                        <br>
  * @date July, 2018
  *
  * @copyright Copyright © 2017 Hornet. All rights reserved.
@@ -42,53 +42,52 @@
 #include "HornetAlg.hpp"
 #include <BufferPool.cuh>
 
-
 namespace hornets_nest {
 
-  using vid_t = int;
-  using HornetGraph = ::hornet::gpu::Hornet<vid_t>;
-  using HornetInit  = ::hornet::HornetInit<vid_t>;
+using vid_t = int;
+using HornetGraph = ::hornet::gpu::Hornet<vid_t>;
+using HornetInit = ::hornet::HornetInit<vid_t>;
 
 using paths_t = unsigned long long int;
 using bc_t = double;
 struct BCData {
-    vid_t *d;
-    vid_t *depth_indices;
-    paths_t *sigma;
-    bc_t *delta;
-    bc_t *bc;
-    vid_t root;
-    degree_t currLevel;
-    TwoLevelQueue<vid_t> queue;
+  vid_t *d;
+  vid_t *depth_indices;
+  paths_t *sigma;
+  bc_t *delta;
+  bc_t *bc;
+  vid_t root;
+  degree_t currLevel;
+  TwoLevelQueue<vid_t> queue;
 };
 
 class BCCentrality : public StaticAlgorithm<HornetGraph> {
   BufferPool pool;
+
 public:
-    BCCentrality(HornetGraph& hornet);
+  BCCentrality(HornetGraph &hornet);
 
-    ~BCCentrality();
+  ~BCCentrality();
 
-    void setRoot(vid_t root_);
+  void setRoot(vid_t root_);
 
-    void reset()    override;
-    void run()      override;
-    void release()  override;
-    bool validate() override;
+  void reset() override;
+  void run() override;
+  void release() override;
+  bool validate() override;
 
-    BCData bc_data() {return hd_BCData;};
+  BCData bc_data() { return hd_BCData; };
 
-    bc_t*    getBCScores();
-    paths_t* getSigmas();
-    bc_t*    getDeltas();
+  bc_t *getBCScores();
+  paths_t *getSigmas();
+  bc_t *getDeltas();
 
-
+  vid_t getBestVertex();
 
 private:
-    load_balancing::BinarySearch load_balancing;
+  load_balancing::BinarySearch load_balancing;
 
-    HostDeviceVar<BCData>       hd_BCData;    
-
+  HostDeviceVar<BCData> hd_BCData;
 };
 
-} // hornetAlgs namespace
+} // namespace hornets_nest

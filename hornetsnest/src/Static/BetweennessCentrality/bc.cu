@@ -1,10 +1,10 @@
 /**
  * @brief
  * @author Oded Green                                                       <br>
- *   NVIDIA Corporation                                                     <br>       
+ *   NVIDIA Corporation                                                     <br>
  *   ogreen@nvidia.com
  *   @author Muhammad Osama Sakhi                                           <br>
- *   Georgia Institute of Technology                                        <br>       
+ *   Georgia Institute of Technology                                        <br>
  * @date July, 2018
  *
  *
@@ -37,7 +37,6 @@
  * </blockquote>}
  */
 
-
 #include "Static/BetweennessCentrality/bc.cuh"
 
 #include "bcOperators.cuh"
@@ -49,114 +48,112 @@ namespace hornets_nest {
 /// TODO - changed hostKatzdata to pointer so that I can try to inherit it in
 // the streaming case.
 
-BCCentrality::BCCentrality(HornetGraph& hornet) :
-                                       StaticAlgorithm(hornet),
-                                       load_balancing(hornet)
-{
-    cout << "hornet.nV   " << hornet.nV() << endl;
+BCCentrality::BCCentrality(HornetGraph &hornet)
+    : StaticAlgorithm(hornet), load_balancing(hornet) {
+  cout << "hornet.nV   " << hornet.nV() << endl;
 
-    host::allocate(hd_BCData().depth_indices, hornet.nV());
-    pool.allocate(&hd_BCData().d, hornet.nV());
+  host::allocate(hd_BCData().depth_indices, hornet.nV());
+  pool.allocate(&hd_BCData().d, hornet.nV());
 
-    pool.allocate(&hd_BCData().sigma, hornet.nV());
-    pool.allocate(&hd_BCData().delta, hornet.nV());
-    pool.allocate(&hd_BCData().bc, hornet.nV());
-    hd_BCData().queue.initialize(hornet);
+  pool.allocate(&hd_BCData().sigma, hornet.nV());
+  pool.allocate(&hd_BCData().delta, hornet.nV());
+  pool.allocate(&hd_BCData().bc, hornet.nV());
+  hd_BCData().queue.initialize(hornet);
 
-    reset();
+  reset();
 }
 
-BCCentrality::~BCCentrality() {
-    release();
-}
+BCCentrality::~BCCentrality() { release(); }
 
 void BCCentrality::reset() {
 
-    forAllnumV(hornet, InitBC { hd_BCData });
-    forAllnumV(hornet, InitOneTree { hd_BCData });
+  forAllnumV(hornet, InitBC{hd_BCData});
+  forAllnumV(hornet, InitOneTree{hd_BCData});
 }
 
-void BCCentrality::release(){
-    host::free(hd_BCData().depth_indices);
-}
+void BCCentrality::release() { host::free(hd_BCData().depth_indices); }
 
-void BCCentrality::setRoot(vid_t root_){
-    hd_BCData().root=root_;
-}
+void BCCentrality::setRoot(vid_t root_) { hd_BCData().root = root_; }
 
 void BCCentrality::run() {
 
+  // Initialization
+  hd_BCData().currLevel = 0;
+  forAllnumV(hornet, InitOneTree{hd_BCData});
+  vid_t root = hd_BCData().root;
 
-    // Initialization
-    hd_BCData().currLevel=0;
-    forAllnumV(hornet, InitOneTree { hd_BCData });
-    vid_t root = hd_BCData().root;
+  hd_BCData().queue.insert(root); // insert source in the frontier
+  forAll(1, InitRootData{hd_BCData});
 
-    hd_BCData().queue.insert(root);                   // insert source in the frontier
-    forAll(1,  InitRootData { hd_BCData });
+  // Regular BFS
+  hd_BCData().depth_indices[0] = 1;
 
-    // Regular BFS
-    hd_BCData().depth_indices[0]=1;
+  vid_t *depArray;
+  pool.allocate(&depArray, hornet.nV());
 
-    vid_t* depArray;
-    pool.allocate(&depArray, hornet.nV());
+  cudaMemcpy(depArray, hd_BCData().queue.device_input_ptr(),
+             sizeof(vid_t) * hd_BCData().queue.size(),
+             cudaMemcpyDeviceToDevice);
 
+  while (hd_BCData().queue.size() > 0) {
 
-    cudaMemcpy(depArray,hd_BCData().queue.device_input_ptr(),sizeof(vid_t)*hd_BCData().queue.size(),cudaMemcpyDeviceToDevice);
+    if (hd_BCData().currLevel > 0) {
+      length_t prevLength =
+          hd_BCData().depth_indices[hd_BCData().currLevel] -
+          hd_BCData().depth_indices[hd_BCData().currLevel - 1];
 
-    while (hd_BCData().queue.size() > 0) {
-
-        if(hd_BCData().currLevel>0) {
-            length_t prevLength = hd_BCData().depth_indices[hd_BCData().currLevel] - 
-                                  hd_BCData().depth_indices[hd_BCData().currLevel-1];
-
-            cudaMemcpy(depArray+hd_BCData().depth_indices[hd_BCData().currLevel-1],
-                       hd_BCData().queue.device_input_ptr(),
-                       sizeof(vid_t)*(prevLength), cudaMemcpyDeviceToDevice);
-        }
-
-
-        forAllEdges(hornet, hd_BCData().queue, BC_BFSTopDown { hd_BCData }, load_balancing);
-        hd_BCData().queue.swap();
-        hd_BCData().depth_indices[hd_BCData().currLevel+1]=
-                       hd_BCData().depth_indices[hd_BCData().currLevel]+hd_BCData().queue.size();
-
-        hd_BCData().currLevel++;
+      cudaMemcpy(depArray +
+                     hd_BCData().depth_indices[hd_BCData().currLevel - 1],
+                 hd_BCData().queue.device_input_ptr(),
+                 sizeof(vid_t) * (prevLength), cudaMemcpyDeviceToDevice);
     }
 
-    hd_BCData().currLevel -= 2;
+    forAllEdges(hornet, hd_BCData().queue, BC_BFSTopDown{hd_BCData},
+                load_balancing);
+    hd_BCData().queue.swap();
+    hd_BCData().depth_indices[hd_BCData().currLevel + 1] =
+        hd_BCData().depth_indices[hd_BCData().currLevel] +
+        hd_BCData().queue.size();
 
-    vid_t deepest = hd_BCData().currLevel-1;
+    hd_BCData().currLevel++;
+  }
 
-    // Reverse BFS - Dependency accumulation
-    while (hd_BCData().currLevel>0) {
-        length_t prevLength = hd_BCData().depth_indices[hd_BCData().currLevel+1] - 
-                              hd_BCData().depth_indices[hd_BCData().currLevel];
-        forAllEdges(hornet, depArray+hd_BCData().depth_indices[hd_BCData().currLevel] ,prevLength, 
-                    BC_DepAccumulation { hd_BCData }, load_balancing);
-        hd_BCData().currLevel--;
-    }
+  hd_BCData().currLevel -= 2;
 
-    if(deepest>0)
-        forAllVertices(hornet, depArray, hd_BCData().depth_indices[deepest],IncrementBCNew { hd_BCData });
+  vid_t deepest = hd_BCData().currLevel - 1;
 
+  // Reverse BFS - Dependency accumulation
+  while (hd_BCData().currLevel > 0) {
+    length_t prevLength = hd_BCData().depth_indices[hd_BCData().currLevel + 1] -
+                          hd_BCData().depth_indices[hd_BCData().currLevel];
+    forAllEdges(hornet,
+                depArray + hd_BCData().depth_indices[hd_BCData().currLevel],
+                prevLength, BC_DepAccumulation{hd_BCData}, load_balancing);
+    hd_BCData().currLevel--;
+  }
+
+  if (deepest > 0)
+    forAllVertices(hornet, depArray, hd_BCData().depth_indices[deepest],
+                   IncrementBCNew{hd_BCData});
 }
 
+bool BCCentrality::validate() { return true; }
 
-bool BCCentrality::validate() {
-    return true;
-}
- 
-bc_t* BCCentrality::getBCScores() {
-    return  bc_data().bc;
-}
+bc_t *BCCentrality::getBCScores() { return bc_data().bc; }
 
-paths_t* BCCentrality::getSigmas() {
-    return  bc_data().sigma;
-}
+paths_t *BCCentrality::getSigmas() { return bc_data().sigma; }
 
-bc_t* BCCentrality::getDeltas() {
-    return  bc_data().delta;
+bc_t *BCCentrality::getDeltas() { return bc_data().delta; }
+
+vid_t BCCentrality::getBestVertex() {
+  // thrust::device_ptr<double> scores_ptr =
+  //     thrust::device_pointer_cast(getBCScores());
+
+  double *scores = getBCScores();
+  double *min_element =
+      thrust::min_element(thrust::device, scores, scores + hornet.nV());
+
+  return (vid_t)(min_element - scores);
 }
 
 } // namespace hornets_nest

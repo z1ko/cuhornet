@@ -1,10 +1,10 @@
 /**
  * @brief
  * @author Oded Green                                                       <br>
- *   NVIDIA Corporation                                                     <br>       
+ *   NVIDIA Corporation                                                     <br>
  *   ogreen@nvidia.com
  *  @author Muhammad Osama Sakhi                                            <br>
- *   Georgia Institute of Technology                                        <br>       
+ *   Georgia Institute of Technology                                        <br>
  * @date July, 2018
  *
  * @copyright Copyright © 2017 Hornet. All rights reserved.
@@ -42,104 +42,94 @@
 
 namespace hornets_nest {
 
-
 // Used at the very beginning of every BC computation.
 // Used only once.
 struct InitBC {
-    HostDeviceVar<BCData> bcd;
+  HostDeviceVar<BCData> bcd;
 
-
-    OPERATOR(vid_t src) {
-        bcd().bc[src] = 0.0;
-    }
+  OPERATOR(vid_t src) { bcd().bc[src] = 0.0; }
 };
 
 struct InitRootData {
-    HostDeviceVar<BCData> bcd;
+  HostDeviceVar<BCData> bcd;
 
-
-    OPERATOR(int  i) {
-        bcd().d[bcd().root]=0;
-        bcd().sigma[bcd().root]=1.0;
-
-    }
+  OPERATOR(int i) {
+    bcd().d[bcd().root] = 0;
+    bcd().sigma[bcd().root] = 1.0;
+  }
 };
- 
-
 
 // Used at the very beginning of every BC computation.
 // Once per root
 struct InitOneTree {
-    HostDeviceVar<BCData> bcd;
+  HostDeviceVar<BCData> bcd;
 
-    // Used at the very beginning
-    OPERATOR(vid_t src) {
-        bcd().d[src] = INT32_MAX;
-        bcd().sigma[src] = 0;
-        bcd().delta[src] = 0.0;
-    }
+  // Used at the very beginning
+  OPERATOR(vid_t src) {
+    bcd().d[src] = INT32_MAX;
+    bcd().sigma[src] = 0;
+    bcd().delta[src] = 0.0;
+  }
 };
 
 struct BC_BFSTopDown {
-    HostDeviceVar<BCData> bcd;
+  HostDeviceVar<BCData> bcd;
 
-    OPERATOR(Vertex& src, Edge& edge){
-        vid_t v = src.id(), w = edge.dst_id();        
-        degree_t nextLevel = bcd().d[v] + 1;
+  OPERATOR(Vertex &src, Edge &edge) {
+    vid_t v = src.id(), w = edge.dst_id();
+    degree_t nextLevel = bcd().d[v] + 1;
 
-        degree_t prev = atomicCAS(bcd().d + w, INT32_MAX, nextLevel);
-        if (prev == INT32_MAX) {
-            bcd().queue.insert(w);
-        }
-        if (bcd().d[w] == nextLevel) {
-            atomicAdd(bcd().sigma + w, bcd().sigma[v]);
-        }
+    degree_t prev = atomicCAS(bcd().d + w, INT32_MAX, nextLevel);
+    if (prev == INT32_MAX) {
+      bcd().queue.insert(w);
     }
+    if (bcd().d[w] == nextLevel) {
+      atomicAdd(bcd().sigma + w, bcd().sigma[v]);
+    }
+  }
 };
-
 
 struct BC_DepAccumulation {
-    HostDeviceVar<BCData> bcd;
+  HostDeviceVar<BCData> bcd;
 
-    OPERATOR(Vertex& src, Edge& edge){
+  OPERATOR(Vertex &src, Edge &edge) {
 
-        vid_t v = src.id(), w = edge.dst_id();        
+    vid_t v = src.id(), w = edge.dst_id();
 
-        degree_t *d = bcd().d;  // depth
-        paths_t *sigma = bcd().sigma;
-        bc_t *delta = bcd().delta;
+    degree_t *d = bcd().d; // depth
+    paths_t *sigma = bcd().sigma;
+    bc_t *delta = bcd().delta;
 
-        if (d[w] == (d[v] + 1))
-        {   
-            atomicAdd(delta + v, ((bc_t) sigma[v] / (bc_t) sigma[w]) * (1.0 + delta[w]));
-        }
+    if (d[w] == (d[v] + 1)) {
+      atomicAdd(delta + v,
+                ((bc_t)sigma[v] / (bc_t)sigma[w]) * (1.0 + delta[w]));
     }
+  }
 };
-
 
 // Used at the very beginning of every BC computation.
 // Once per root
 struct IncrementBC {
-    HostDeviceVar<BCData> bcd;
+  HostDeviceVar<BCData> bcd;
 
-    // Used at the very beginning
-    OPERATOR(vid_t src) {
-        if(src != bcd().root)
-            bcd().bc[src]+=bcd().delta[src];
-    }
+  // Used at the very beginning
+  OPERATOR(vid_t src) {
+    if (src != bcd().root)
+      bcd().bc[src] += bcd().delta[src];
+  }
 };
 
 // Used at the very beginning of every BC computation.
 // Once per root
 struct IncrementBCNew {
-    HostDeviceVar<BCData> bcd;
+  HostDeviceVar<BCData> bcd;
 
-    // Used at the very beginning
-    OPERATOR(Vertex& sr) {
-        vid_t src = sr.id();
-        if(src != bcd().root)
-            bcd().bc[src]+=bcd().delta[src];
-    }   
+  // Used at the very beginning
+  OPERATOR(Vertex &sr) {
+    vid_t src = sr.id();
+    if (src != bcd().root)
+      bcd().bc[src] += bcd().delta[src];
+  }
 };
 
 } // namespace hornets_nest

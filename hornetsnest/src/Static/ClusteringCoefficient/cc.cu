@@ -2,7 +2,7 @@
 /**
  * @brief
  * @author Oded Green                                                       <br>
- *   NVIDIA Corporation                                                     <br>       
+ *   NVIDIA Corporation                                                     <br>
  *   ogreen@nvidia.com
  * @date October, 2018
  *
@@ -34,21 +34,20 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  * </blockquote>}
- * 
+ *
  * Please cite:
- * * J. Fox, O. Green, K. Gabert, X. An, D. Bader, “Fast and Adaptive List Intersections on the GPU”, 
- * IEEE High Performance Extreme Computing Conference (HPEC), 
+ * * J. Fox, O. Green, K. Gabert, X. An, D. Bader, “Fast and Adaptive List
+ * Intersections on the GPU”, IEEE High Performance Extreme Computing Conference
+ * (HPEC), Waltham, Massachusetts, 2018
+ * * O. Green, J. Fox, A. Tripathy, A. Watkins, K. Gabert, E. Kim, X. An, K.
+ * Aatish, D. Bader, “Logarithmic Radix Binning and Vectorized Triangle
+ * Counting”, IEEE High Performance Extreme Computing Conference (HPEC),
  * Waltham, Massachusetts, 2018
- * * O. Green, J. Fox, A. Tripathy, A. Watkins, K. Gabert, E. Kim, X. An, K. Aatish, D. Bader, 
- * “Logarithmic Radix Binning and Vectorized Triangle Counting”, 
- * IEEE High Performance Extreme Computing Conference (HPEC), 
- * Waltham, Massachusetts, 2018
- * * O. Green, P. Yalamanchili ,L.M. Munguia, “Fast Triangle Counting on GPU”, 
- * Irregular Applications: Architectures and Algorithms (IA3), 
+ * * O. Green, P. Yalamanchili ,L.M. Munguia, “Fast Triangle Counting on GPU”,
+ * Irregular Applications: Architectures and Algorithms (IA3),
  * New Orleans, Louisiana, 2014
- * 
+ *
  */
-
 
 #include "Static/ClusteringCoefficient/cc.cuh"
 #include "Static/TriangleCounting/triangle2.cuh"
@@ -58,70 +57,67 @@ using namespace gpu;
 
 namespace hornets_nest {
 
-ClusteringCoefficient::ClusteringCoefficient(HornetGraph& hornet) :
-                                        TriangleCounting2(hornet)
-                                       // StaticAlgorithm(hornet)                                      
-{
-}
+ClusteringCoefficient::ClusteringCoefficient(HornetGraph &hornet)
+    : TriangleCounting2(hornet)
+// StaticAlgorithm(hornet)
+{}
 
-ClusteringCoefficient::~ClusteringCoefficient(){
-    TriangleCounting2::release();
-    release();
+ClusteringCoefficient::~ClusteringCoefficient() {
+  TriangleCounting2::release();
+  release();
 }
-
 
 struct OPERATOR_LocalClusteringCoefficients {
-    triangle_t *d_triPerVertex;
-    clusterCoeff_t      *d_ccLocal;
+  triangle_t *d_triPerVertex;
+  clusterCoeff_t *d_ccLocal;
 
-    OPERATOR (Vertex &vertex) {
-        degree_t deg = vertex.degree();
-        d_ccLocal[vertex.id()] = 0;
+  OPERATOR(Vertex &vertex) {
+    degree_t deg = vertex.degree();
+    d_ccLocal[vertex.id()] = 0;
 
-        if(deg>1){
-            d_ccLocal[vertex.id()] = (clusterCoeff_t)d_triPerVertex[vertex.id()]/(clusterCoeff_t)(deg*(deg-1));
-        }
+    if (deg > 1) {
+      d_ccLocal[vertex.id()] = (clusterCoeff_t)d_triPerVertex[vertex.id()] /
+                               (clusterCoeff_t)(deg * (deg - 1));
     }
+  }
 };
 
-
-void ClusteringCoefficient::reset(){
-    TriangleCounting2::reset();
-}
+void ClusteringCoefficient::reset() { TriangleCounting2::reset(); }
 #include <cub/cub.cuh>
-void ClusteringCoefficient::run(){
-    TriangleCounting2::run();
-    forAllVertices(hornet, OPERATOR_LocalClusteringCoefficients { triPerVertex,d_ccLocal }); 
+void ClusteringCoefficient::run() {
+  TriangleCounting2::run();
 
-    int _num_items = hornet.nV();
+  forAllVertices(hornet,
+                 OPERATOR_LocalClusteringCoefficients{triPerVertex, d_ccLocal});
 
-    byte_t*  _d_temp_storage     { nullptr };
-    size_t _temp_storage_bytes { 0 };
-    cub::DeviceReduce::Sum(_d_temp_storage, _temp_storage_bytes,d_ccLocal, d_ccGlobal, _num_items); // Allocating storage needed by CUB for the reduce
-    pool.allocate(&_d_temp_storage, _temp_storage_bytes);
-    cub::DeviceReduce::Sum(_d_temp_storage, _temp_storage_bytes, d_ccLocal, d_ccGlobal, _num_items);
+  int _num_items = hornet.nV();
 
-    gpu::copyToHost(d_ccGlobal, 1, &h_ccGlobal);
+  byte_t *_d_temp_storage{nullptr};
+  size_t _temp_storage_bytes{0};
+  cub::DeviceReduce::Sum(
+      _d_temp_storage, _temp_storage_bytes, d_ccLocal, d_ccGlobal,
+      _num_items); // Allocating storage needed by CUB for the reduce
+  pool.allocate(&_d_temp_storage, _temp_storage_bytes);
+  cub::DeviceReduce::Sum(_d_temp_storage, _temp_storage_bytes, d_ccLocal,
+                         d_ccGlobal, _num_items);
 
-    std::cout << "Global CC " << h_ccGlobal/hornet.nV() << std::endl;
- }
-
-
-void ClusteringCoefficient::release(){
-    d_ccLocal = nullptr;
+  gpu::copyToHost(d_ccGlobal, 1, &h_ccGlobal);
+  h_ccGlobal /= hornet.nV();
 }
 
-void ClusteringCoefficient::init(){
-    //printf("Inside init. Printing hornet.nV(): %d\n", hornet.nV());
-    pool.allocate(&d_ccLocal, hornet.nV());
-    pool.allocate(&d_ccGlobal, 1);
+void ClusteringCoefficient::release() { d_ccLocal = nullptr; }
 
-    TriangleCounting2::init();
-    reset();
+void ClusteringCoefficient::init() {
+  // printf("Inside init. Printing hornet.nV(): %d\n", hornet.nV());
+  pool.allocate(&d_ccLocal, hornet.nV());
+  pool.allocate(&d_ccGlobal, 1);
+
+  TriangleCounting2::init();
+  reset();
 }
 
-void ClusteringCoefficient::copyLocalClusCoeffToHost(clusterCoeff_t* h_tcs){
-    gpu::copyToHost(d_ccLocal, hornet.nV(), h_tcs);
+void ClusteringCoefficient::copyLocalClusCoeffToHost(clusterCoeff_t *h_tcs) {
+  gpu::copyToHost(d_ccLocal, hornet.nV(), h_tcs);
 }
 
 } // namespace hornets_nest
