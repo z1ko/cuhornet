@@ -113,7 +113,7 @@ CSoAData<TypeList<Ts...>, device_t> &BLOCK_ARRAY::get_soa_data(void) noexcept {
 
 #define BLOCK_ARRAY_SORT_OLD 0
 #define BLOCK_ARRAY_SORT_VERBOSE 0
-#define BLOCK_ARRAY_SORT_SKIP_SIZE 32
+#define BLOCK_ARRAY_SORT_SKIP_SIZE 64
 
 template <typename... Ts, DeviceType device_t, typename degree_t>
 void BLOCK_ARRAY::sort(void) {
