@@ -42,34 +42,14 @@ using HornetBatchUpdate = hornet::gpu::BatchUpdate<vert_t>;
 
 // Generate a batch that requires an expansion
 void generateEvilBatch(
-    vert_t *src, vert_t *dst, int batch_size, dist_t *dist,
+    int seed, vert_t *src, vert_t *dst, int batch_size, dist_t *dist,
     int dist_size /*, int delta, int minimum, int maximum*/) {
 
-  srand(time(0));
+  srand(time(0) + seed);
   for (int i = 0; i < batch_size; i++) {
 
     vert_t src_id = rand() % dist_size;
     vert_t dst_id = rand() % dist_size;
-
-    /*
-    while(dist[src_id] == INF || dist[dst_id] - dist[src_id] < delta) {
-
-        // Force minimum level of the edge source
-        if (minimum != -1 && dist[src_id] < minimum)
-          continue;
-
-        // Force maximum level of edge source
-        //if (maximum != -1 && dist[src_id] > maximum)
-        //  continue;
-
-        src_id = rand() % dist_size;
-        dst_id = rand() % dist_size;
-    }
-    */
-
-    // Force minimum level of the edge source
-    // if (minimum != -1 && dist[src_id] < minimum)
-    //  continue;
 
     src[i] = src_id;
     dst[i] = dst_id;
@@ -131,6 +111,11 @@ int exec(int argc, char **argv) {
 
   graph::GraphStd<vert_t, vert_t> host_graph(ENABLE_INGOING);
   host_graph.read(args.filepath.c_str());
+  if (!host_graph.is_undirected()) {
+    std::cout << "Only undirected graphs are supported in this benchmark\n";
+    return 1;
+  }
+
   HornetInit graph_init{host_graph.nV(), host_graph.nE(),
                         host_graph.csr_out_offsets(),
                         host_graph.csr_out_edges()};
@@ -141,10 +126,7 @@ int exec(int argc, char **argv) {
     std::cerr << "graph" << SEP << "seq" << SEP << "frontier_expansions_count"
               << SEP << "initial_frontier_size" << SEP << "vertex_update_time"
               << SEP << "expansion_time" << SEP << "dbfs_time" << SEP
-              << "bfs_time" << SEP << "bfs_max_level" << SEP << "batch_size"
-              << SEP << "batch_generation_time" << SEP << "density" << SEP
-              << "vertices" << SEP << "edges" << SEP << "cc" << SEP
-              << "triangles" << SEP << "average_degree" << std::endl;
+              << "bfs_time" << std::endl;
   }
 
   timer::Timer<timer::DEVICE> device_timer;
@@ -170,7 +152,8 @@ int exec(int argc, char **argv) {
 
       float batch_generation_time;
       INSTRUMENT(host_timer, batch_generation_time, {
-        generateEvilBatch(batch_src, batch_dst, batch_size, nullptr, graph.nV()
+        generateEvilBatch(benchmark * batch_size, batch_src, batch_dst,
+                          batch_size, nullptr, graph.nV()
                           /*, batch_delta, min_batch_level, max_batch_level*/);
 
         // Insert reverse edges of batch
@@ -181,8 +164,7 @@ int exec(int argc, char **argv) {
                  sizeof(vert_t) * batch_size);
         }
       });
-
-      /// Apply cache relabeling
+      (void)batch_generation_time;
 
       // Insert direct edges
       HornetBatchUpdate update{
@@ -191,32 +173,8 @@ int exec(int argc, char **argv) {
 
       // Apply dynamic BFS update
       float dbfs_time;
-      INSTRUMENT(device_timer, dbfs_time, DBFS.update(update));
+      INSTRUMENT(device_timer, dbfs_time, DBFS.update_bottom_up(update));
       bool valid = DBFS.validate();
-
-      // Calculate new graph metrics...
-      float density =
-          (float)graph.nE() / ((float)graph.nV() * ((float)graph.nV() - 1));
-      if (host_graph.is_undirected())
-        density *= 2.0f;
-
-      int vertices = graph.nV();
-      int edges = graph.nE();
-
-      float average_degree = (float)graph.nE() / graph.nV();
-      float clustering_coeff = 0.0f;
-      int triangles = 0;
-
-      // Dont calculate coeff for very large graphs
-      if (graph.nE() <= 100'000'000) {
-
-        ClusteringCoefficient CC{graph};
-        CC.init();
-        CC.run();
-
-        clustering_coeff = CC.getGlobalClusteringCoeff();
-        triangles = CC.countTriangles();
-      }
 
       // Remove batch of the direct edges
       auto update_soa_ptr = update.in_edge().get_soa_ptr();
@@ -233,11 +191,7 @@ int exec(int argc, char **argv) {
                   << stats.frontier_expansions_count << SEP
                   << stats.initial_frontier_size << SEP
                   << stats.vertex_update_time << SEP << stats.expansion_time
-                  << SEP << dbfs_time << SEP << stats.bfs_time << SEP
-                  << stats.bfs_max_level << SEP << batch_size << SEP
-                  << batch_generation_time << SEP << density << SEP << vertices
-                  << SEP << edges << SEP << clustering_coeff << SEP << triangles
-                  << SEP << average_degree << std::endl;
+                  << SEP << dbfs_time << SEP << stats.bfs_time << std::endl;
       } else {
         std::cout << "Error...\n";
       }

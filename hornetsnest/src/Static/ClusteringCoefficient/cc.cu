@@ -83,7 +83,6 @@ struct OPERATOR_LocalClusteringCoefficients {
 };
 
 void ClusteringCoefficient::reset() { TriangleCounting2::reset(); }
-#include <cub/cub.cuh>
 void ClusteringCoefficient::run() {
   TriangleCounting2::run();
 

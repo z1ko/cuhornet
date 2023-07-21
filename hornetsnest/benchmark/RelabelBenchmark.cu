@@ -108,24 +108,30 @@ int main(int argc, char **argv) {
   if (args.csv_header) {
     std::cerr << "graph" << SEP << "bfs_time" << SEP << "bfs_time_rel" << SEP
               << "bfs_time_rel_ord" << SEP << "map_time_rel" << SEP
-              << "map_time_rel_ord" << SEP << "avg_degree" << SEP << "density"
-              << SEP << "vertices" << SEP << "edges" << std::endl;
+              << "map_time_rel_ord" << SEP << "map_sorting_time_rel" << SEP
+              << "map_sorting_time_rel_ord" << SEP << "map_generation_time_rel"
+              << SEP << "map_generation_time_rel_ord" << SEP
+              << "map_applying_time_rel" << SEP << "map_applying_time_rel_ord"
+              << SEP << "avg_degree" << SEP << "density" << SEP << "vertices"
+              << SEP << "edges" << std::endl;
   }
 
   HornetGraph graph{graph_init};
-
-  BFSRelabel<HornetGraph> relabeler{graph};
+  BFSRelabel<HornetGraph> relabeler;
   for (int i = 0; i < args.iterations; i++) {
-    float bfs_time, bfs_time_rel, bfs_time_rel_ord, map_time_rel,
-        map_time_rel_ord;
+    float bfs_time, bfs_time_rel, bfs_time_rel_ord, map_sorting_time_rel,
+        map_sorting_time_rel_ord, map_generation_time_rel, map_time_rel,
+        map_time_rel_ord, map_generation_time_rel_ord, map_applying_time_rel,
+        map_applying_time_rel_ord;
 
     if (args.verbose) {
       printf("Graph before randomize:\n\n");
       graph.print();
     }
 
+    // =============================================================================
     // Apply a random permutation to the graph
-    auto d_map = relabeler.randomize();
+    auto d_map = relabeler.randomize(graph);
 
     if (args.verbose) {
       printf("Mapping (from -> to):\n\n");
@@ -150,10 +156,16 @@ int main(int argc, char **argv) {
     BFS_SETUP(bfs, source);
     INSTRUMENT(dev_timer, bfs_time, bfs.run());
 
+    // =============================================================================
     // Apply reordering for current source
-    d_map = relabeler.relabel(source, false);
+    d_map = relabeler.relabel(graph, source, false);
     auto stats = relabeler.get_stats();
-    map_time_rel = stats.generation_time + stats.applying_time;
+    map_sorting_time_rel = stats.sorting_time;
+    map_generation_time_rel = stats.generation_time;
+    map_applying_time_rel = stats.applying_time;
+
+    map_time_rel =
+        map_sorting_time_rel + map_generation_time_rel + map_applying_time_rel;
 
     // Run new bfs, source is now at id zero
     BfsTopDown2<HornetGraph> rbfs{graph};
@@ -167,10 +179,22 @@ int main(int argc, char **argv) {
     BFS_SETUP(rbfs, 0);
     INSTRUMENT(dev_timer, bfs_time_rel, rbfs.run());
 
+    // =============================================================================
+    // Randomize again graph
+    d_map = relabeler.randomize(graph);
+    thrust::host_vector<vert_t> h_map = d_map;
+    vert_t new_source = h_map[0];
+
+    // =============================================================================
     // Apply reordering with sorting
-    d_map = relabeler.relabel(0, true);
+    d_map = relabeler.relabel(graph, new_source, true);
     stats = relabeler.get_stats();
-    map_time_rel_ord = stats.generation_time + stats.applying_time;
+    map_sorting_time_rel_ord = stats.sorting_time;
+    map_generation_time_rel_ord = stats.generation_time;
+    map_applying_time_rel_ord = stats.applying_time;
+
+    map_time_rel_ord = map_sorting_time_rel_ord + map_generation_time_rel_ord +
+                       map_applying_time_rel_ord;
 
     // Run new bfs, source is now at id zero
     BfsTopDown2<HornetGraph> robfs{graph};
@@ -187,8 +211,12 @@ int main(int argc, char **argv) {
     // Output as CSV row
     std::cerr << args.filepath << SEP << bfs_time << SEP << bfs_time_rel << SEP
               << bfs_time_rel_ord << SEP << map_time_rel << SEP
-              << map_time_rel_ord << SEP << average_degree << SEP << density
-              << SEP << graph.nV() << SEP << graph.nE() << std::endl;
+              << map_time_rel_ord << SEP << map_sorting_time_rel << SEP
+              << map_sorting_time_rel_ord << SEP << map_generation_time_rel
+              << SEP << map_generation_time_rel_ord << SEP
+              << map_applying_time_rel << SEP << map_applying_time_rel_ord
+              << SEP << average_degree << SEP << density << SEP << graph.nV()
+              << SEP << graph.nE() << std::endl;
   }
 
   return 0;

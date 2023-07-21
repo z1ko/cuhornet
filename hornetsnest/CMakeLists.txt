@@ -99,7 +99,10 @@ target_link_libraries(dbfs hornetAlg)
 # add_executable(dbfs_benchmark_stream benchmark/DBFSBenchmarkStream.cu)
 # target_link_libraries(dbfs_benchmark_stream hornetAlg)
 
-add_executable(dbfs_benchmark_stream benchmark/DBFSBenchmarkStream2.cu)
+# add_executable(dbfs_benchmark_stream benchmark/DBFSBenchmarkStream2.cu)
+# target_link_libraries(dbfs_benchmark_stream hornetAlg)
+
+add_executable(dbfs_benchmark_stream benchmark/DBFSBenchmarkStreamFinal.cu)
 target_link_libraries(dbfs_benchmark_stream hornetAlg)
 
 add_executable(relabel_benchmark benchmark/RelabelBenchmark.cu)
@@ -107,3 +110,6 @@ target_link_libraries(relabel_benchmark hornetAlg)
 
 add_executable(graph_stats benchmark/GraphStats.cu)
 target_link_libraries(graph_stats hornetAlg)
+
+add_executable(budbfs_benchmark_stream benchmark/BUDBFSBenchmark.cu)
+target_link_libraries(budbfs_benchmark_stream hornetAlg)

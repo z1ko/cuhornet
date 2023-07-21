@@ -4,10 +4,15 @@
 #include <BufferPool.cuh>
 #include <Device/Util/Timer.cuh>
 #include <LoadBalancing/LogarithmRadixBinning.cuh>
+#include <Macros.hpp>
 #include <Static/BreadthFirstSearch/TopDown2.cuh>
+#include <algorithm>
+#include <cstdio>
 #include <cuda_device_runtime_api.h>
 #include <iterator>
 #include <stdio.h>
+#include <thrust/detail/raw_pointer_cast.h>
+#include <thrust/device_vector.h>
 
 namespace hornets_nest {
 
@@ -21,9 +26,13 @@ class DynamicBFS : public StaticAlgorithm<HornetGraph> {
 public:
   // Contains useful statistics
   struct Stats {
+
     // General frontier data
     int frontier_expansions_count;
     int initial_frontier_size;
+    int min_frontier_size;
+    int max_frontier_size;
+    int median_frontier_size;
 
     // Time measures for dynamic update
     float vertex_update_time;
@@ -53,9 +62,12 @@ public:
   /// distance array
   void update(BatchUpdate &batch);
 
-  /// @brief Use the distance vector to calculate a permutation
-  /// of the nodes that is cache friendly and apply it to the graph.
-  void apply_cache_reordering(bool sort_edges = false);
+  /// @brief Process the inserted of removed edges to generate an updated
+  /// distance array
+  void update_bottom_up(BatchUpdate &batch);
+
+  /// @brief Apply a node relabeling to the stored distance vector
+  void relabel(const thrust::device_vector<vert_t> &map);
 
   /// @brief Return current distance vector
   dist_t *current_distances();
@@ -234,6 +246,42 @@ struct DynamicExpandEdge {
   }
 };
 
+struct BUBatchVertexUpdate {
+  dist_t *read_distances, *write_distances;
+  TwoLevelQueue<vert_t> frontier;
+
+  OPERATOR(Vertex &src, Vertex &dst) {
+
+    const int src_distance = read_distances[src.id()];
+    const int dst_distance = read_distances[dst.id()];
+
+    const int delta = dst_distance - src_distance;
+    if (delta > 1) {
+      atomicMin(&write_distances[dst.id()], src_distance + 1);
+    }
+  }
+};
+
+struct BUDynamicExpandEdge {
+
+  int *work_to_do;
+  dist_t *read_distances, *write_distances;
+
+  OPERATOR(Vertex &vertex, Edge &edge) {
+
+    const int our_dist = read_distances[vertex.id()];
+    const int src_dist =
+        read_distances[edge.dst_id()]; // We are using the parent graph
+
+    const int delta = our_dist - src_dist;
+    if (delta > 1) {
+      // Get the lowest parent distance
+      if (atomicMin(&write_distances[vertex.id()], src_dist + 1) == our_dist)
+        *work_to_do = true;
+    }
+  }
+};
+
 //------------------------------------------------------------------------------
 
 template <typename HornetGraph>
@@ -348,6 +396,7 @@ template <typename HornetGraph> void DynamicBFS<HornetGraph>::run() {
 #endif
 }
 
+/*
 /// Size of the shared memory per block used for the local histogram
 #define PARTIAL_HIST_SIZE 4096
 
@@ -440,6 +489,7 @@ __global__ void kernel_make_permutation_map(const vert_t *permutation,
     map[node_id] = i;
   }
 }
+*/
 
 #define PERMUTATION_BLOCK_SIZE 1024
 #define PERMUTATION_BLOCK_WORK 20
@@ -450,10 +500,33 @@ __global__ void kernel_make_permutation_map(const vert_t *permutation,
 #define PERMUTATION_VALIDATE 1
 #define PERMUTATION_VERBOSE 0
 
+__global__ void dbfs_apply_relabel(const dist_t *read_dist, dist_t *write_dist,
+                                   const dist_t *map, const int N) {
+  int i;
+  KERNEL_FOR_STRIDED(i, N) { write_dist[map[i]] = read_dist[i]; }
+}
+
+template <typename HornetGraph>
+void DynamicBFS<HornetGraph>::relabel(
+    const thrust::device_vector<vert_t> &map) {
+
+  const vert_t *map_ptr = thrust::raw_pointer_cast(&map[0]);
+  const int BC = BLOCK_COUNT(_graph.nV(), PERMUTATION_WORK);
+  dbfs_apply_relabel<<<BC, PERMUTATION_BLOCK_SIZE>>>(
+      current_distances(), write_distances(), map_ptr, _graph.nV());
+
+  swap_and_sync_distances();
+
+  // Obtain new source id, if it is a bfs cache relabeling it should be zero
+  thrust::host_vector<vert_t> h_map = map;
+  _source = h_map[_source];
+  printf("dbfs new source after relabel is %d\n", _source);
+}
+
+/*
 template <typename HornetGraph>
 void DynamicBFS<HornetGraph>::apply_cache_reordering(bool sort_edges) {
 #if PERMUTATION_USE_HISTOGRAM
-  /*
   const int graph_blocks_count =
       (_graph.nV() + PERMUTATION_BLOCK_ITEMS - 1) / PERMUTATION_BLOCK_ITEMS;
   const int acc_blocks_count =
@@ -534,7 +607,6 @@ void DynamicBFS<HornetGraph>::apply_cache_reordering(bool sort_edges) {
       current_distances(), write_distances(), _relabeling, _graph.nV());
   swap_distances();
 
-  */
 #else
 
   const int nV = _graph.nV();
@@ -621,6 +693,7 @@ void DynamicBFS<HornetGraph>::apply_cache_reordering(bool sort_edges) {
 #endif
 #endif
 }
+*/
 
 #define DBFS_VERTEX_UPDATE_NO_ATOMIC 0
 #if DBFS_VERTEX_UPDATE_NO_ATOMIC
@@ -730,10 +803,16 @@ void DynamicBFS<HornetGraph>::update(BatchUpdate &batch) {
 
   _device_timer.stop();
   _stats.vertex_update_time = _device_timer.duration();
+
+  std::vector<int> frontier_sizes;
+  frontier_sizes.reserve(1024);
+
   _device_timer.start();
 
   _stats.initial_frontier_size = _frontier.size();
   while (_frontier.size() != 0) {
+
+    frontier_sizes.push_back(_frontier.size());
     _stats.frontier_expansions_count += 1;
 
     // Propagate changes to all children
@@ -747,7 +826,63 @@ void DynamicBFS<HornetGraph>::update(BatchUpdate &batch) {
   }
 
   _device_timer.stop();
+
   _stats.expansion_time = _device_timer.duration();
+  _stats.min_frontier_size =
+      *std::min_element(frontier_sizes.begin(), frontier_sizes.end());
+  _stats.max_frontier_size =
+      *std::max_element(frontier_sizes.begin(), frontier_sizes.end());
+
+  // Calculate median frontier size
+  _stats.median_frontier_size = 0;
+  if (!frontier_sizes.empty()) {
+
+    const auto middle = frontier_sizes.begin() + frontier_sizes.size() / 2;
+    std::nth_element(frontier_sizes.begin(), middle, frontier_sizes.end());
+
+    _stats.median_frontier_size = *middle;
+    if (frontier_sizes.size() % 2 == 0) {
+      const auto left_middle = std::max_element(frontier_sizes.begin(), middle);
+      _stats.median_frontier_size = (*left_middle + *middle) / 2;
+    }
+  }
+}
+
+template <typename HornetGraph>
+void DynamicBFS<HornetGraph>::update_bottom_up(BatchUpdate &batch) {
+  const int BATCH_SIZE = batch.size();
+  _device_timer.start();
+
+  int *work_to_do;
+  cudaMalloc(&work_to_do, sizeof(int));
+  int host_work_to_do;
+
+  sync_distances();
+  forAllEdgesBatch(_graph, batch,
+                   BUBatchVertexUpdate{current_distances(), write_distances()});
+  swap_and_sync_distances();
+
+  _device_timer.stop();
+  _stats.vertex_update_time = _device_timer.duration();
+  _device_timer.start();
+
+  do {
+    cudaMemset(work_to_do, 0, sizeof(char));
+    forAllEdges(
+        _parent_graph,
+        BUDynamicExpandEdge{work_to_do, current_distances(), write_distances()},
+        _load_balancing);
+    swap_and_sync_distances();
+
+    // Check if there is more work to do
+    cudaMemcpy(&host_work_to_do, work_to_do, sizeof(char),
+               cudaMemcpyDeviceToHost);
+
+  } while (host_work_to_do != 0);
+
+  _device_timer.stop();
+  _stats.expansion_time = _device_timer.duration();
+  cudaFree(&work_to_do);
 }
 
 #if 0

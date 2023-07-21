@@ -35,45 +35,43 @@
  */
 #include "BinarySearchKernel.cuh"
 #include "StandardAPI.hpp"
-#include <Device/Primitives/CubWrapper.cuh>  //xlib::CubExclusiveSum
-#include <Device/Util/DeviceProperties.cuh>  //xlib::SMemPerBlock
-#include <thrust/scan.h>                     //thrust::exclusive_scan
+#include <Device/Primitives/CubWrapper.cuh> //xlib::CubExclusiveSum
+#include <Device/Util/DeviceProperties.cuh> //xlib::SMemPerBlock
+#include <thrust/scan.h>                    //thrust::exclusive_scan
 
 namespace hornets_nest {
 namespace load_balancing {
 
-template<typename HornetClass>
-BinarySearch::BinarySearch(HornetClass& hornet,
+template <typename HornetClass>
+BinarySearch::BinarySearch(HornetClass &hornet,
                            const float work_factor) noexcept {
-    //static_assert(IsHornet<HornetClass>::value,
-    //             "BinarySearch: parameter is not an instance of Hornet Class");
-    d_work.resize(work_factor * hornet.nV());
+  // static_assert(IsHornet<HornetClass>::value,
+  //              "BinarySearch: parameter is not an instance of Hornet Class");
+  d_work.resize(work_factor * hornet.nV());
 }
 
 inline BinarySearch::~BinarySearch() noexcept {
-    //hornets_nest::gpu::free(_d_work);
+  // hornets_nest::gpu::free(_d_work);
 }
 
-template<typename HornetClass, typename Operator, typename vid_t>
-void BinarySearch::apply(HornetClass& hornet,
-                         const vid_t *      d_input,
-                         int                num_vertices,
-                         const Operator&    op) const noexcept {
+template <typename HornetClass, typename Operator, typename vid_t>
+void BinarySearch::apply(HornetClass &hornet, const vid_t *d_input,
+                         int num_vertices, const Operator &op) const noexcept {
 
-    d_work.resize(num_vertices + 1);
-    assert(num_vertices < _work_size && "BinarySearch (work queue) too small");
-    //printf("[BSLD] Resized d_work and prefixsum to %d\n", num_vertices + 1);
+  d_work.resize(num_vertices + 1);
+  assert(num_vertices < _work_size && "BinarySearch (work queue) too small");
+  // printf("[BSLD] Resized d_work and prefixsum to %d\n", num_vertices + 1);
 
-    if (d_input != nullptr) {
-    kernel::computeWorkKernel
-        <<< xlib::ceil_div<BLOCK_SIZE>(num_vertices), BLOCK_SIZE >>>
-        (hornet.device(), d_input, num_vertices, d_work.data().get());
-    } else {
-    kernel::computeWorkKernel
-        <<< xlib::ceil_div<BLOCK_SIZE>(num_vertices), BLOCK_SIZE >>>
-        (hornet.device(), num_vertices, d_work.data().get());
-    }
-    CHECK_CUDA_ERROR
+  if (d_input != nullptr) {
+    kernel::computeWorkKernel<<<xlib::ceil_div<BLOCK_SIZE>(num_vertices),
+                                BLOCK_SIZE>>>(
+        hornet.device(), d_input, num_vertices, d_work.data().get());
+  } else {
+    kernel::computeWorkKernel<<<xlib::ceil_div<BLOCK_SIZE>(num_vertices),
+                                BLOCK_SIZE>>>(hornet.device(), num_vertices,
+                                              d_work.data().get());
+  }
+  CHECK_CUDA_ERROR
 
 #if 0
     thrust::host_vector<vid_t> h_input(num_vertices);
@@ -85,8 +83,8 @@ void BinarySearch::apply(HornetClass& hornet,
         printf("[%6d]\tvertex: %6d | work_size: %4d\n", i, h_input[i], h_work[i]);
 #endif
 
-    thrust::exclusive_scan(d_work.begin(), d_work.end(), d_work.begin());
-    CHECK_CUDA_ERROR
+  thrust::exclusive_scan(d_work.begin(), d_work.end(), d_work.begin());
+  CHECK_CUDA_ERROR
 
 #if 0
     printf("[BSLD] Executed PrefixSum, result vector:\n");
@@ -96,42 +94,42 @@ void BinarySearch::apply(HornetClass& hornet,
     printf("[BSLD] Total work: %d\n", h_work[h_work.size() - 1]);
 #endif
 
-    int total_work;
-    cuMemcpyToHost(d_work.data().get() + num_vertices, total_work);
-    if (total_work == 0)
-        return;
+  int total_work;
+  cuMemcpyToHost(d_work.data().get() + num_vertices, total_work);
+  if (total_work == 0)
+    return;
 
-    const unsigned int BLOCK_COUNT = xlib::ceil_div(total_work, BLOCK_SIZE);
-    if (d_input != nullptr) {
-    kernel::binarySearchKernel<BLOCK_SIZE>
-        <<< BLOCK_COUNT, BLOCK_SIZE >>>
-        (hornet.device(), d_input, d_work.data().get(), num_vertices + 1, op);
-    } else {
-    kernel::binarySearchKernel<BLOCK_SIZE>
-        <<< BLOCK_COUNT, BLOCK_SIZE >>>
-        (hornet.device(), d_work.data().get(), num_vertices + 1, op);
-    }
-    CHECK_CUDA_ERROR
+  const unsigned int BLOCK_COUNT = xlib::ceil_div(total_work, BLOCK_SIZE);
+  if (d_input != nullptr) {
+    kernel::binarySearchKernel<BLOCK_SIZE><<<BLOCK_COUNT, BLOCK_SIZE>>>(
+        hornet.device(), d_input, d_work.data().get(), num_vertices + 1, op);
+  } else {
+    kernel::binarySearchKernel<BLOCK_SIZE><<<BLOCK_COUNT, BLOCK_SIZE>>>(
+        hornet.device(), d_work.data().get(), num_vertices + 1, op);
+  }
+  CHECK_CUDA_ERROR
 }
 
-template<typename HornetClass, typename Operator>
-void BinarySearch::apply(HornetClass& hornet, const Operator& op)
-                         const noexcept {
-    apply<HornetClass, Operator, int>(hornet, nullptr, (int) hornet.nV(), op);
+template <typename HornetClass, typename Operator>
+void BinarySearch::apply(HornetClass &hornet,
+                         const Operator &op) const noexcept {
+  apply<HornetClass, Operator, int>(hornet, nullptr, (int)hornet.nV(), op);
 }
 
-template<typename HornetClass, typename Operator, template<typename> typename Update, typename vid_t>
-void BinarySearch::apply(HornetClass& hornet, Update<vid_t>& batch, const Operator& op, bool reverse) {
+template <typename HornetClass, typename Operator,
+          template <typename> typename Update, typename vid_t>
+void BinarySearch::apply(HornetClass &hornet, Update<vid_t> &batch,
+                         const Operator &op, bool reverse) {
 
-    auto soa_ptr = batch.in_edge().get_soa_ptr();
-    vid_t *d_input;
+  auto soa_ptr = batch.in_edge().get_soa_ptr();
+  vid_t *d_input;
 
-    if (reverse)
-        d_input = soa_ptr.template get<1>();
-    else
-        d_input = soa_ptr.template get<0>();
+  if (reverse)
+    d_input = soa_ptr.template get<1>();
+  else
+    d_input = soa_ptr.template get<0>();
 
-    apply<HornetClass, Operator, vid_t>(hornet, d_input, batch.size(), op);
+  apply<HornetClass, Operator, vid_t>(hornet, d_input, batch.size(), op);
 }
 
 } // namespace load_balancing

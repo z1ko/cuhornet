@@ -74,7 +74,8 @@ else()
 
 endif()
 
-set(CMAKE_CUDA_ARCHITECTURES "${GPU_ARCHS}")
+# Build only for native architecture
+set(CMAKE_CUDA_ARCHITECTURES native) # "${GPU_ARCHS}")
 set(CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
 
 message("-- Building for GPU_ARCHS = ${GPU_ARCHS}")

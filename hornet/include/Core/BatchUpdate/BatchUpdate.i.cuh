@@ -767,7 +767,7 @@ void BATCH_UPDATE::move_adjacency_lists(
   }
   PEEK_LAST_STATUS()
   degree_t total_work = duplicate_flag[duplicate_flag.size() - 1];
-  //printf("Move adj lists total work: %d\n", total_work);
+  // printf("Move adj lists total work: %d\n", total_work);
 
   if (total_work != 0) {
     const int BLOCK_SIZE = 256;
@@ -810,13 +810,13 @@ void BATCH_UPDATE::appendBatchEdges(
   
   printf("Unique degrees:\n");
   thrust::copy(d_unique_degrees.begin(), d_unique_degrees.end(), std::ostream_iterator<degree_t>(std::cout, " "));
-  std::cout << "\n\n"; 
+  std::cout << "\n\n";
 #endif
 
   cub_prefixsum.run(unique_degrees.data().get(), unique_degrees.size());
   degree_t total_work = unique_degrees[unique_degrees.size() - 1];
-  //printf("Total appendBatchEdges work:%d\n", total_work);
-  
+  // printf("Total appendBatchEdges work:%d\n", total_work);
+
   degree_t *old_degree = graph_offsets.data().get();
 
 #if 0
@@ -851,12 +851,20 @@ void BATCH_UPDATE::print(bool sort) noexcept {
   thrust::copy(ptr.template get<1>(), ptr.template get<1>() + size(),
                dst.begin());
   if (!sort) {
+
+    thrust::host_vector<vid_t> h_src = src;
+    thrust::host_vector<vid_t> h_dst = dst;
+    for (int i = 0; i < size(); ++i)
+      printf("%2d -> %2d\n", h_src[i], h_dst[i]);
+
+    /*
     thrust::copy(src.begin(), src.end(),
                  std::ostream_iterator<vid_t>(std::cout, " "));
     std::cout << "\n";
     thrust::copy(dst.begin(), dst.end(),
                  std::ostream_iterator<vid_t>(std::cout, " "));
     std::cout << "\n";
+    */
   } else {
     thrust::host_vector<vid_t> hSrc = src;
     thrust::host_vector<vid_t> hDst = dst;
