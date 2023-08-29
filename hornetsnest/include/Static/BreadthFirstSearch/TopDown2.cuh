@@ -60,6 +60,12 @@ using dist_t = int;
 template <typename HornetGraph>
 class BfsTopDown2 : public StaticAlgorithm<HornetGraph> {
 public:
+  struct Stats {
+    int frontier_expansions_count = 0;
+    int max_frontier_size = 0;
+  };
+
+public:
   BfsTopDown2(HornetGraph &hornet);
   ~BfsTopDown2();
 
@@ -74,7 +80,8 @@ public:
 
   dist_t getLevels() { return current_level; }
 
-  dist_t* get_distance_vector() { return d_distances; }
+  dist_t *get_distance_vector() { return d_distances; }
+  Stats get_stats() { return _stats; }
 
 private:
   BufferPool pool;
@@ -84,6 +91,8 @@ private:
   dist_t *d_distances{nullptr};
   vid_t bfs_source{0};
   dist_t current_level{0};
+
+  Stats _stats{0};
 };
 
 using BfsTopDown2Dynamic = BfsTopDown2<HornetDynamicGraph>;
@@ -106,24 +115,22 @@ struct BFSOperatorAtomic { // deterministic
   TwoLevelQueue<vid_t> queue;
 
   OPERATOR(Vertex &vertex, Edge &edge) {
-      //printf("Visiting %d -> %d\n", vertex.id(), edge.dst_id());
+    // printf("Visiting %d -> %d\n", vertex.id(), edge.dst_id());
 
-      auto dst = edge.dst_id();
-      if (d_distances[dst] == INF) {
-          if (atomicCAS(d_distances + dst, INF, current_level) == INF) {
-              queue.insert(dst);
+    auto dst = edge.dst_id();
+    if (d_distances[dst] == INF) {
+      if (atomicCAS(d_distances + dst, INF, current_level) == INF) {
+        queue.insert(dst);
 
-              //printf("\tVertex %d is now at distance %d, added to queue\n", 
-              //  edge.dst_id(), current_level);
-          }
+        // printf("\tVertex %d is now at distance %d, added to queue\n",
+        //   edge.dst_id(), current_level);
+      }
     }
   }
 };
 
 struct Printer {
-  OPERATOR(Vertex &vertex) {
-    printf("%d ", vertex.id());
-  }
+  OPERATOR(Vertex &vertex) { printf("%d ", vertex.id()); }
 };
 
 //------------------------------------------------------------------------------
@@ -135,7 +142,8 @@ struct Printer {
 
 template <typename HornetGraph>
 BFSTOPDOWN2::BfsTopDown2(HornetGraph &hornet)
-    : StaticAlgorithm<HornetGraph>(hornet), queue(hornet, 5), load_balancing(hornet, 5.0f) {
+    : StaticAlgorithm<HornetGraph>(hornet), queue(hornet, 5),
+      load_balancing(hornet, 5.0f) {
   pool.allocate(&d_distances, hornet.nV());
   reset();
 }
@@ -159,7 +167,14 @@ void BFSTOPDOWN2::set_parameters(vid_t source, int load_balancing) {
 }
 
 template <typename HornetGraph> void BFSTOPDOWN2::run() {
+
+  _stats.frontier_expansions_count = 0;
+  _stats.max_frontier_size = 0;
+
   while (queue.size() > 0) {
+
+    _stats.frontier_expansions_count += 1;
+    _stats.max_frontier_size = max(_stats.max_frontier_size, queue.size());
 
 #if 0
     // Print all nodes in the queue
@@ -169,7 +184,7 @@ template <typename HornetGraph> void BFSTOPDOWN2::run() {
     printf("\n");
 #endif
 
-      //printf("Expanding queue of %d nodes\n", queue.size());
+    // printf("Expanding queue of %d nodes\n", queue.size());
     forAllEdges(StaticAlgorithm<HornetGraph>::hornet, queue,
                 BFSOperatorAtomic{current_level, d_distances, queue},
                 load_balancing);
@@ -180,8 +195,8 @@ template <typename HornetGraph> void BFSTOPDOWN2::run() {
 }
 
 template <typename HornetGraph> void BFSTOPDOWN2::release() {
-    gpu::free(d_distances, StaticAlgorithm<HornetGraph>::hornet.nV());
-    d_distances = nullptr;
+  gpu::free(d_distances, StaticAlgorithm<HornetGraph>::hornet.nV());
+  d_distances = nullptr;
 }
 
 template <typename HornetGraph> bool BFSTOPDOWN2::validate() { return true; }

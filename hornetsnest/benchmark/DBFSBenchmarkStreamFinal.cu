@@ -187,12 +187,14 @@ int exec(int argc, char **argv) {
   const char SEP = '\t';
   if (args.csv_header) {
     std::cout << "graph" << SEP << "transient" << SEP << "batch_size" << SEP
-              << "seq" << SEP << "frontier_expansions_count" << SEP
+              << "seq" << SEP << "dbfs_frontier_expansions_count" << SEP
+              << "bfs_frontier_expansion_count" << SEP
               << "initial_frontier_size" << SEP << "vertex_update_time" << SEP
               << "expansion_time" << SEP << "min_frontier_size" << SEP
-              << "median_frontier_size" << SEP << "max_frontier_size" << SEP
-              << "dbfs_time" << SEP << "bfs_time" << SEP << "bfs_max_level"
-              << SEP << "batch_generation_time" << std::endl;
+              << "median_frontier_size" << SEP << "dbfs_max_frontier_size"
+              << SEP << "bfs_max_frontier_size" << SEP << "dbfs_time" << SEP
+              << "bfs_time" << SEP << "bfs_max_level" << SEP
+              << "batch_generation_time" << std::endl;
   }
 
   // Open a binary file to write all batches
@@ -389,14 +391,17 @@ int exec(int argc, char **argv) {
       if (valid) {
         std::cout << graph_name << SEP << transient << SEP << batch_size << SEP
                   << benchmark << SEP << dbfs_stats.frontier_expansions_count
+                  << SEP << dbfs_stats.bfs_stats.frontier_expansions_count
                   << SEP << dbfs_stats.initial_frontier_size << SEP
                   << dbfs_stats.vertex_update_time << SEP
                   << dbfs_stats.expansion_time << SEP
                   << dbfs_stats.min_frontier_size << SEP
                   << dbfs_stats.median_frontier_size << SEP
-                  << dbfs_stats.max_frontier_size << SEP << stats.dbfs_time
-                  << SEP << stats.bfs_time << SEP << stats.bfs_max_level << SEP
-                  << stats.batch_generation_time << std::endl;
+                  << dbfs_stats.max_frontier_size << SEP
+                  << dbfs_stats.bfs_stats.max_frontier_size << SEP
+                  << stats.dbfs_time << SEP << stats.bfs_time << SEP
+                  << stats.bfs_max_level << SEP << stats.batch_generation_time
+                  << std::endl;
       } else {
         std::cerr << "Error...\n";
       }

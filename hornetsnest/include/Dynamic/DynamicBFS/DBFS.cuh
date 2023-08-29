@@ -40,6 +40,8 @@ public:
 
     float bfs_time;
     int bfs_max_level;
+
+    typename BfsTopDown2<HornetGraph>::Stats bfs_stats;
   };
 
 public:
@@ -748,7 +750,9 @@ __global__ void kernel_apply_distances(vert_t *unique_destinations,
 
 template <typename HornetGraph>
 void DynamicBFS<HornetGraph>::update(BatchUpdate &batch) {
+
   const int BATCH_SIZE = batch.size();
+  _stats = {0};
   _device_timer.start();
 
 #if DBFS_VERTEX_UPDATE_NO_ATOMIC
@@ -967,6 +971,7 @@ template <typename HornetGraph> bool DynamicBFS<HornetGraph>::validate() {
   BFS.run();
   _device_timer.stop();
 
+  _stats.bfs_stats = BFS.get_stats();
   _stats.bfs_time = _device_timer.duration();
   _stats.bfs_max_level = BFS.getLevels();
 
