@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cuda_device_runtime_api.h>
+#include <device_atomic_functions.h>
 #include <iterator>
 #include <stdio.h>
 #include <thrust/detail/raw_pointer_cast.h>
@@ -60,9 +61,12 @@ public:
 
   void set_device_distance_vector(int *distances);
 
-  /// @brief Process the inserted or removed edges to generate an updated
+  /// @brief Process the inserted edges to generate an updated
   /// distance array
   void update(BatchUpdate &batch);
+
+  /// @brief Process the removed edges to generate an updatet distance array
+  void erase(BatchUpdate &batch, bool verbose);
 
   /// @brief Process the inserted of removed edges to generate an updated
   /// distance array
@@ -852,6 +856,182 @@ void DynamicBFS<HornetGraph>::update(BatchUpdate &batch) {
   }
 }
 
+struct EraseBatchUpdate {
+
+  int *flagged;
+  dist_t *read_distances;
+  TwoLevelQueue<vert_t> origins;
+
+  OPERATOR(Vertex &src, Vertex &dst) {
+
+    const int src_distance = read_distances[src.id()];
+    const int dst_distance = read_distances[dst.id()];
+
+    // printf("Check edge: %d(%d) -> %d(%d)\n", src.id(), src_distance,
+    // dst.id(),
+    //        dst_distance);
+
+    if (dst_distance > src_distance) {
+      // printf("Found origin: %d\n", dst.id());
+      origins.insert(dst.id());
+      atomicExch(flagged + dst.id(), 1);
+    }
+  }
+};
+
+struct FindPrecursors {
+  int *flagged;
+  dist_t *read_distances;
+  TwoLevelQueue<vert_t> frontier;
+  TwoLevelQueue<vert_t> precursors;
+
+  OPERATOR(Vertex &src, Edge &edge) {
+
+    const int src_distance = read_distances[edge.src_id()];
+    const int dst_distance = read_distances[edge.dst_id()];
+
+    // printf("Check edge: %d(%d) -> %d(%d)\n", edge.src_id(), src_distance,
+    //        edge.dst_id(), dst_distance);
+
+    vert_t dst_id = edge.dst_id();
+    if (dst_distance > src_distance) {
+      // We found a node under the influence of an origin, we must continue
+      // the search to a precursors
+      // printf("continue search from %d\n", dst_id);
+      frontier.insert(dst_id);
+      atomicExch(flagged + dst_id, 1);
+    } else {
+      // The destination node is from another origin, so it's a precursor
+      // printf("found precursor: %d\n", dst_id);
+      precursors.insert(dst_id);
+    }
+  }
+};
+
+struct FilterPrecursors {
+
+  int *flagged;
+  TwoLevelQueue<vert_t> frontier;
+
+  OPERATOR(vert_t id) {
+    if (flagged[id] == 0)
+      frontier.insert(id);
+  }
+};
+
+struct ResetDistance {
+  int *flagged;
+  dist_t *write_distances;
+  OPERATOR(Vertex &vertex) {
+    vert_t id = vertex.id();
+    if (flagged[id] != 0 && id != 512 && id != 1280) {
+      // printf("flagged: %d\n", id);
+      write_distances[id] = INF;
+    }
+  }
+};
+
+struct PropagatePrecursors {
+
+  dist_t *read_distances, *write_distances;
+  TwoLevelQueue<vert_t> frontier;
+
+  OPERATOR(Vertex &src, Edge &edge) {
+
+    const int src_dist = read_distances[edge.src_id()];
+    const int dst_dist = read_distances[edge.dst_id()];
+
+    vert_t dst_id = edge.dst_id();
+    if (dst_dist > src_dist + 1) {
+
+      // Modify distance of destination node, if the operation returns our read
+      // value then we must add to queue
+      if (atomicMin(&write_distances[dst_id], src_dist + 1) == dst_dist) {
+        frontier.insert(dst_id);
+      }
+    }
+  }
+};
+
+template <typename HornetGraph>
+void DynamicBFS<HornetGraph>::erase(BatchUpdate &batch, bool verbose) {
+
+  const int BATCH_SIZE = batch.size();
+  sync_distances();
+
+  // 1) Add to the frontier only the nodes that had one of their useful edges
+  // removed
+  // 2) Propagate from the remaining nodes to their precursors adding
+  // them to a queue and flagging all traversed nodes as modifiable.
+  // 3) Eliminate all precursors that are modifiable nodes
+  // 4) Propagate distances as normal from precursors
+
+  thrust::device_vector<int> flagged(_graph.nV(), 0);
+  int *flagged_ptr = thrust::raw_pointer_cast(&flagged[0]);
+
+  _frontier.clear();
+  forAllEdgesBatch(
+      _graph, batch,
+      EraseBatchUpdate{flagged_ptr, current_distances(), _frontier});
+
+  _frontier.swap();
+  if (verbose) {
+    printf("Origin nodes count: %d\n", _frontier.size());
+    _frontier.print();
+  }
+
+  // Find all precursors
+  TwoLevelQueue<vert_t> precursors{_graph, 10.0f};
+  while (_frontier.size() != 0) {
+    forAllEdges(
+        _graph, _frontier,
+        FindPrecursors{flagged_ptr, current_distances(), _frontier, precursors},
+        _load_balancing);
+    _frontier.swap();
+  }
+
+  precursors.swap();
+  if (verbose) {
+    printf("Found this precursors(unfiltered): %d\n", precursors.size());
+    precursors.print();
+  }
+
+  // Remove precursors that can't be used because they are under the influence
+  // of an origin, that is, they are flagged
+  forAll(precursors, FilterPrecursors{flagged_ptr, _frontier});
+
+  _frontier.swap();
+  if (verbose) {
+    printf("Found this precursors(filtered): %d\n", _frontier.size());
+    _frontier.print();
+  }
+
+  // Reset the distance of all flagged nodes to INF
+  forAllVertices(_graph, ResetDistance{flagged_ptr, write_distances()});
+  swap_and_sync_distances();
+
+  // If there are no precursors then we have finished
+  if (precursors.size() == 0) {
+    if (verbose)
+      printf("No precursors, stopping\n");
+    return;
+  }
+
+  // Propagate from the precursors normally
+  while (_frontier.size() != 0) {
+    if (verbose)
+      printf("Expanding with %d elements\n", _frontier.size());
+
+    forAllEdges(
+        _graph, _frontier,
+        PropagatePrecursors{current_distances(), write_distances(), _frontier},
+        _load_balancing);
+
+    swap_and_sync_distances();
+    _frontier.swap();
+  }
+}
+
 template <typename HornetGraph>
 void DynamicBFS<HornetGraph>::update_bottom_up(BatchUpdate &batch) {
   const int BATCH_SIZE = batch.size();
@@ -975,6 +1155,7 @@ template <typename HornetGraph> bool DynamicBFS<HornetGraph>::validate() {
   _stats.bfs_time = _device_timer.duration();
   _stats.bfs_max_level = BFS.getLevels();
 
+#if 0
   thrust::device_ptr<dist_t> bfs_dist =
       thrust::device_pointer_cast(BFS.get_distance_vector());
 
@@ -984,8 +1165,9 @@ template <typename HornetGraph> bool DynamicBFS<HornetGraph>::validate() {
   bool equal =
       thrust::equal(thrust::device, bfs_dist, bfs_dist + nV, dbfs_dist);
   return equal;
+#endif
 
-#if 0
+#if 1
 
   // Copy normal BFS distance vector
   auto *nbfs_host_distances = new dist_t[nV];
@@ -1013,14 +1195,14 @@ template <typename HornetGraph> bool DynamicBFS<HornetGraph>::validate() {
       error_count += 1;
       printf("[%6d] vertex %6d | nbfs: %6d, dbfs: %6d\n", error_count, i,
              nbfs_host_distances[i], dbfs_host_distances[i]);
-#if 1
+#if 0
       if (error_count >= 10) {
         printf("... and other errors\n");
         break;
       }
 #endif
+    }
   }
-}
 
   delete[] nbfs_host_distances;
   delete[] dbfs_host_distances;

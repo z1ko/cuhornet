@@ -113,3 +113,6 @@ target_link_libraries(graph_stats hornetAlg)
 
 add_executable(budbfs_benchmark_stream benchmark/BUDBFSBenchmark.cu)
 target_link_libraries(budbfs_benchmark_stream hornetAlg)
+
+add_executable(dbfs_benchmark_erase benchmark/DBFSBenchmarkErase.cu)
+target_link_libraries(dbfs_benchmark_erase hornetAlg)
